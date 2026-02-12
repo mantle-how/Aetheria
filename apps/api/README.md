@@ -10,4 +10,4 @@
 * **router:** 路由分組(world,agent,event,admin,replay)
 * **schemes:** api request/ response dto
 * **deps.py:** di dbsession auth rate_limit
-* **main.py:** 入口口
+* **main.py:** 入口
