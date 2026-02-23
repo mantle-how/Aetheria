@@ -8,5 +8,8 @@
 * **migration/** :資料庫版控
 
 ## MQ(選擇性):
-
+* **任務佇列**
 ## observability可觀測性:
+* **logging:** 日誌紀錄
+* **metrics:** 蒐集系統狀態的log
+* **tracing:** 追蹤請求流程
