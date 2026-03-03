@@ -1,27 +1,49 @@
-import tkinter as tk
-import random
+from __future__ import annotations
 
-from model.test import Entity, Agent, InteractiveEntity
+from pathlib import Path
+import sys
+
+
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+from model.config import LoggingConfig, SimulationConfig
+from model.test import build_demo_simulation, simulation_to_entities
 from view.topdown import TopDownVisualizer
 
 
-def make_demo_entities():
-    entities = []
-    # Agents
-    entities.append(Agent(1, "Alice", 0, 0, 'F', 100, 30, []))
-    entities.append(Agent(2, "Bob", -20, 10, 'M', 100, 28, []))
-    entities.append(Agent(3, "Eve", 50, -30, 'F', 90, 25, []))
-    # Interactive entities
-    entities.append(InteractiveEntity(10, "Chest", 15, 5, durability=10))
-    entities.append(InteractiveEntity(11, "Research Node", -40, 20, durability=5))
-    entities.append(InteractiveEntity(12, "Door", 30, 40, durability=100))
-    # Generic entities
-    entities.append(Entity(20, "Rock", -5, -10))
-    entities.append(Entity(21, "Tree", 20, 15))
-    return entities
+def main() -> None:
+    config = SimulationConfig(logging=LoggingConfig(print_to_stdout=False))
+    simulation = build_demo_simulation(config)
+    visualizer = TopDownVisualizer(width=900, height=700)
+
+    def get_entities():
+        return simulation_to_entities(simulation)
+
+    def step_once():
+        simulation.step()
+
+    def status_text(is_running: bool) -> str:
+        minute_of_day = simulation.world.minute_of_day
+        hour = minute_of_day // 60
+        minute = minute_of_day % 60
+        state_label = "播放中" if is_running else "已暫停"
+        return (
+            f"步次: {simulation.world.tick_count:03d}  "
+            f"時間: {hour:02d}:{minute:02d}  "
+            f"狀態: {state_label}  "
+            "操作: 空白鍵暫停或繼續, +/- 縮放, Esc 關閉"
+        )
+
+    visualizer.show_live(
+        get_entities=get_entities,
+        step_once=step_once,
+        status_provider=status_text,
+        interval_ms=500,
+    )
 
 
-if __name__ == '__main__':
-    entities = make_demo_entities()
-    viz = TopDownVisualizer(width=800, height=600)
-    viz.show(entities)
+if __name__ == "__main__":
+    main()
