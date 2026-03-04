@@ -1,25 +1,45 @@
-# 邏輯處理
+# 領域層說明
 
-## **world:** 
-* **world_model.py:** world狀態模型(時間、全局參數、環境等等)
-* **map_generator.py:** 世界生成器(世界seed)
-* **rule.py:** 世界規則(天氣、經濟、災害、資源)
+`domain/` 是 Aetheria Demo 的核心領域層，負責定義世界規則、代理人行為、事件資料，以及以 tick 為單位推進的模擬流程。
 
-## **agent:** 
-* **agent_model.py:** 角色模型(狀態、位置、屬性、存活)
-* **needs.py:** 需求(飢餓、疲勞、安全、社交、金錢、色慾)
-* **personality.py:** 人格特質
-* **relationship.py:** 關係模型(信任、好感、敵意、熟悉度)
+目前的領域層分成四個子模組：
 
-## **event:** 
-* **base.py:** 事件基本屬性(tick、actor、payload schema)
-* **world_event.py:** 世界事件定義(地震、暴雨、政策、經濟波動)
-* **agent_event.py:** 人物事件定義(移動、對話、受傷、婚姻、生育)
-* **codecs.py:** 事件序列化
-* **taxonomy.py:** 事件分類統計
+- `agent/`：代理人的狀態、需求、關係與決策邏輯。
+- `event/`：模擬事件的共用資料格式與日誌輸出格式。
+- `simulation/`：感知建構、步進流程協調與事件記錄。
+- `world/`：世界狀態、地點資料、全域規則與動作執行。
 
-## **simulation:** 
-* **perception.py:** 感知(視野內的資訊、周圍的聲音)
-* **decision_policy:** 決策模型
-* **action_system.py:** 行動解析(行動如何更改狀態)
-* **conflict_resolution.py:** 衝突處理(搶資源、打架、碰撞時的固定規則)
+## 主要責任
+
+- 不負責畫面呈現；UI 由 `view/` 處理。
+- 依賴 `model/` 提供的共享資料契約，例如 `ActionIntent`、`ActionType`、`SimulationConfig`。
+- 專注在領域邏輯，也就是代理人如何決定行動，以及世界如何回應行動。
+
+## 執行流程
+
+目前一次模擬步驟（`ABMSimulation.step()`）的流程如下：
+
+1. 先對所有代理人套用被動需求衰減。
+2. 為每個代理人建立 `AgentPerception` 感知快照。
+3. 呼叫 `ABMAgent.decide_action()` 產生 `ActionIntent`。
+4. 將意圖交給 `SimulationWorld.execute_action()` 執行。
+5. 產生 `SimulationEvent`，並交由 `SimulationLogger` 記錄。
+6. 推進 `tick_count` 與 `minute_of_day`。
+
+## 模組對照
+
+- `agent/agent_model.py`：`ABMAgent`，包含行動優先序與目的地選擇。
+- `agent/need.py`：`NeedState`，負責飢餓、精力、心情的更新。
+- `agent/relationship.py`：`Relationship` 與 `RelationshipLedger`，負責社交親和度追蹤。
+- `event/base.py`：`SimulationEvent`，目前模擬使用的單一事件結構。
+- `simulation/perception.py`：`AgentPerception`、`SimulationLogger`、`ABMSimulation`。
+- `world/place.py`：`Place`，可互動地點的資料模型。
+- `world/rule.py`：`WorldRules`，基於設定的唯讀規則介面。
+- `world/world_model.py`：`SimulationWorld`，世界狀態容器與動作執行器。
+
+## 設計備註
+
+- 目前模擬為單執行緒，並依序更新每一位代理人。
+- 事件模型刻意保持精簡，讓日誌與視圖層都能直接使用。
+- 若要新增新動作，通常會一起調整：
+  `model/action.py`、`domain/agent/agent_model.py`、`domain/world/world_model.py`。
