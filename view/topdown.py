@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable
+import threading
+import time
 import tkinter as tk
 
 
@@ -10,7 +12,7 @@ class TopDownVisualizer:
 
     live 模式會同步開啟：
     - 上帝視角俯視圖
-    - 代理人儀表板（需求線圖 + 食物剩餘）
+    - 代理人儀表板（需求線圖 + 生命值 HP）
     """
 
     FONT_FAMILY = "Microsoft JhengHei UI"
@@ -51,7 +53,10 @@ class TopDownVisualizer:
     DASHBOARD_CARD_HEIGHT = 190
     DASHBOARD_GAP = 12
     DASHBOARD_OUTER_MARGIN = 16
+    DASHBOARD_ROWS_PER_COLUMN = 5
     CHART_HISTORY_LIMIT = 60
+    LIVE_UI_REFRESH_MS = 33
+    DASHBOARD_RENDER_EVERY = 3
 
     def __init__(self, width: int = 800, height: int = 600, margin: float = 0.1):
         self.width = width
@@ -61,6 +66,8 @@ class TopDownVisualizer:
 
     def entity_color(self, entity) -> str:
         class_name = entity.__class__.__name__
+        if class_name == "ABMAgent":
+            class_name = "Agent"
         return self.COLOR_MAP.get(class_name, "#777777")
 
     def compute_bounds(self, entities) -> tuple[float, float, float, float]:
@@ -217,7 +224,7 @@ class TopDownVisualizer:
     def _record_agent_history(
         self,
         entities,
-        history: dict[int, list[tuple[Hashable, dict[str, int]]]],
+        history: dict[int, list[tuple[Hashable, dict[str, float]]]],
         frame_key: Hashable,
     ) -> list:
         agents = self._agent_entities(entities)
@@ -243,19 +250,20 @@ class TopDownVisualizer:
 
     def _current_need_bounds(
         self,
-        history: dict[int, list[tuple[Hashable, dict[str, int]]]],
-    ) -> tuple[int, int]:
-        minimum = 0
-        maximum = 100
+        history: dict[int, list[tuple[Hashable, dict[str, float]]]],
+    ) -> tuple[float, float]:
+        minimum = 0.0
+        maximum = 100.0
 
         for series in history.values():
             for _, snapshot in series:
                 for value in snapshot.values():
-                    minimum = min(minimum, int(value))
-                    maximum = max(maximum, int(value))
+                    numeric = float(value)
+                    minimum = min(minimum, numeric)
+                    maximum = max(maximum, numeric)
 
         if minimum == maximum:
-            maximum = minimum + 1
+            maximum = minimum + 1.0
         return minimum, maximum
 
     def _flatten_points(self, points: list[tuple[float, float]]) -> list[float]:
@@ -285,11 +293,16 @@ class TopDownVisualizer:
             bg=background,
             highlightthickness=0,
         )
-        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        vertical_scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        horizontal_scrollbar = tk.Scrollbar(window, orient="horizontal", command=canvas.xview)
+        canvas.configure(
+            yscrollcommand=vertical_scrollbar.set,
+            xscrollcommand=horizontal_scrollbar.set,
+        )
 
         canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        vertical_scrollbar.pack(side="right", fill="y")
+        horizontal_scrollbar.pack(side="bottom", fill="x")
 
         def on_mousewheel(event):
             canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -298,16 +311,15 @@ class TopDownVisualizer:
         return window, canvas
 
     def _dashboard_columns(self, agent_count: int) -> int:
-        usable_width = self.DASHBOARD_WIDTH - (self.DASHBOARD_OUTER_MARGIN * 2)
-        columns = int((usable_width + self.DASHBOARD_GAP) // (self.DASHBOARD_MIN_CARD_WIDTH + self.DASHBOARD_GAP))
-        columns = max(1, columns)
-        return max(1, min(agent_count, columns))
+        count = max(1, agent_count)
+        rows_per_column = max(1, self.DASHBOARD_ROWS_PER_COLUMN)
+        return max(1, (count + rows_per_column - 1) // rows_per_column)
 
     def render_dashboard(
         self,
         canvas: tk.Canvas,
         agents,
-        history: dict[int, list[tuple[Hashable, dict[str, int]]]],
+        history: dict[int, list[tuple[Hashable, dict[str, float]]]],
     ) -> None:
         canvas.delete("all")
 
@@ -323,23 +335,27 @@ class TopDownVisualizer:
             return
 
         columns = self._dashboard_columns(len(agents))
-        rows = (len(agents) + columns - 1) // columns
-        usable_width = self.DASHBOARD_WIDTH - (self.DASHBOARD_OUTER_MARGIN * 2)
-        card_width = (usable_width - ((columns - 1) * self.DASHBOARD_GAP)) / columns
+        rows = min(len(agents), self.DASHBOARD_ROWS_PER_COLUMN)
+        card_width = float(self.DASHBOARD_MIN_CARD_WIDTH)
+        total_width = (
+            (self.DASHBOARD_OUTER_MARGIN * 2)
+            + (columns * card_width)
+            + max(0, columns - 1) * self.DASHBOARD_GAP
+        )
         total_height = 60 + rows * (self.DASHBOARD_CARD_HEIGHT + self.DASHBOARD_GAP)
-        canvas.configure(scrollregion=(0, 0, self.DASHBOARD_WIDTH, total_height))
+        canvas.configure(scrollregion=(0, 0, total_width, total_height))
 
         canvas.create_text(
             18,
             16,
-            text="代理人儀表板（需求線圖 + 食物剩餘）",
+            text="代理人儀表板（需求線圖 + 生命值 HP）",
             anchor="nw",
             fill="#111111",
             font=(self.FONT_FAMILY, 12, "bold"),
         )
 
-        legend_x = self.DASHBOARD_WIDTH - 230
-        legend_y = 18
+        legend_x = 18
+        legend_y = 34
         for index, (key, color) in enumerate(self.NEED_COLORS.items()):
             item_x = legend_x + index * 72
             canvas.create_line(item_x, legend_y + 7, item_x + 18, legend_y + 7, fill=color, width=3)
@@ -354,11 +370,12 @@ class TopDownVisualizer:
 
         value_min, value_max = self._current_need_bounds(history)
         value_span = value_max - value_min
-        max_food = max(1, max(int(getattr(agent, "food_inventory", 0)) for agent in agents))
+        if value_span <= 0:
+            value_span = 1.0
 
         for index, agent in enumerate(agents):
-            row = index // columns
-            column = index % columns
+            column = index // self.DASHBOARD_ROWS_PER_COLUMN
+            row = index % self.DASHBOARD_ROWS_PER_COLUMN
 
             left = self.DASHBOARD_OUTER_MARGIN + column * (card_width + self.DASHBOARD_GAP)
             top = 46 + row * (self.DASHBOARD_CARD_HEIGHT + self.DASHBOARD_GAP)
@@ -367,8 +384,8 @@ class TopDownVisualizer:
 
             card_left = left + 10
             card_right = right - 10
-            food_bar_top = top + 34
-            food_bar_bottom = top + 50
+            hp_bar_top = top + 34
+            hp_bar_bottom = top + 50
             plot_top = top + 64
             plot_bottom = bottom - 16
             plot_height = plot_bottom - plot_top
@@ -376,7 +393,9 @@ class TopDownVisualizer:
             agent_id = int(getattr(agent, "entity_id"))
             name = str(getattr(agent, "name", f"Agent {agent_id}"))
             current_needs = agent.needs.as_dict()
-            food_inventory = int(getattr(agent, "food_inventory", 0))
+            health = float(getattr(agent, "health", 0.0))
+            alive = bool(getattr(agent, "is_alive", True))
+            alive_text = "存活" if alive else "死亡"
             action_value = getattr(getattr(agent, "last_action", None), "value", None)
             action_text = "-" if action_value is None else self.ACTION_LABELS.get(str(action_value), str(action_value))
             series = history.get(agent_id, [])
@@ -393,7 +412,7 @@ class TopDownVisualizer:
             canvas.create_text(
                 card_right,
                 top + 14,
-                text=f"動作: {action_text}  食物: {food_inventory}",
+                text=f"動作: {action_text}  HP: {health:.2f}  狀態: {alive_text}",
                 anchor="e",
                 fill="#475569",
                 font=(self.FONT_FAMILY, 9),
@@ -401,30 +420,37 @@ class TopDownVisualizer:
 
             canvas.create_text(
                 card_left,
-                food_bar_top - 10,
-                text="食物剩餘",
+                hp_bar_top - 10,
+                text="生命值 HP",
                 anchor="w",
                 fill="#6B7280",
                 font=(self.FONT_FAMILY, 8),
             )
             canvas.create_rectangle(
                 card_left,
-                food_bar_top,
+                hp_bar_top,
                 card_right,
-                food_bar_bottom,
+                hp_bar_bottom,
                 fill="#EDF2F7",
                 outline="#D7DCE3",
             )
 
-            fill_width = (card_right - card_left) * (food_inventory / max_food) if max_food > 0 else 0.0
+            hp_ratio = max(0.0, min(1.0, health / 100.0))
+            fill_width = (card_right - card_left) * hp_ratio
             if fill_width > 0:
+                if hp_ratio >= 0.6:
+                    hp_color = "#22C55E"
+                elif hp_ratio >= 0.3:
+                    hp_color = "#F59E0B"
+                else:
+                    hp_color = "#EF4444"
                 canvas.create_rectangle(
                     card_left,
-                    food_bar_top,
+                    hp_bar_top,
                     card_left + fill_width,
-                    food_bar_bottom,
-                    fill="#F59E0B",
-                    outline="#F59E0B",
+                    hp_bar_bottom,
+                    fill=hp_color,
+                    outline=hp_color,
                 )
 
             canvas.create_rectangle(
@@ -438,7 +464,7 @@ class TopDownVisualizer:
 
             grid_lines = (
                 (0.0, value_min),
-                (0.5, int(value_min + value_span * 0.5)),
+                (0.5, value_min + value_span * 0.5),
                 (1.0, value_max),
             )
             for ratio, label in grid_lines:
@@ -447,7 +473,7 @@ class TopDownVisualizer:
                 canvas.create_text(
                     card_left - 5,
                     y,
-                    text=str(label),
+                    text=f"{label:.2f}",
                     anchor="e",
                     fill="#7A8088",
                     font=(self.FONT_FAMILY, 8),
@@ -465,7 +491,7 @@ class TopDownVisualizer:
                         else:
                             x = card_left + ((card_right - card_left) * offset / (series_count - 1))
 
-                        value = int(snapshot.get(need_key, value_min))
+                        value = float(snapshot.get(need_key, value_min))
                         normalized = (value - value_min) / value_span
                         y = plot_bottom - (plot_height * normalized)
                         points.append((x, y))
@@ -488,9 +514,9 @@ class TopDownVisualizer:
                 card_left,
                 plot_top + 10,
                 text=(
-                    f"飢餓 {current_needs['hunger']:>3}  "
-                    f"精力 {current_needs['energy']:>3}  "
-                    f"心情 {current_needs['mood']:>3}"
+                    f"飢餓 {current_needs['hunger']:6.2f}  "
+                    f"精力 {current_needs['energy']:6.2f}  "
+                    f"心情 {current_needs['mood']:6.2f}"
                 ),
                 anchor="nw",
                 fill="#475569",
@@ -524,10 +550,21 @@ class TopDownVisualizer:
         canvas = tk.Canvas(root, width=self.width, height=self.height, bg="#F0F0F0")
         canvas.pack()
 
-        initial_entities = get_entities()
+        simulation_lock = threading.Lock()
+        state_lock = threading.Lock()
+        stop_event = threading.Event()
+
+        def safe_get_entities():
+            with simulation_lock:
+                return get_entities()
+
+        def safe_step_once():
+            with simulation_lock:
+                step_once()
+
+        initial_entities = safe_get_entities()
         initial_agents = self._agent_entities(initial_entities)
-        columns = self._dashboard_columns(max(1, len(initial_agents)))
-        rows = (max(1, len(initial_agents)) + columns - 1) // columns
+        rows = min(max(1, len(initial_agents)), self.DASHBOARD_ROWS_PER_COLUMN)
         dashboard_height = min(760, 80 + rows * (self.DASHBOARD_CARD_HEIGHT + self.DASHBOARD_GAP))
         dashboard_window, dashboard_canvas = self._create_scroll_window(
             root=root,
@@ -537,58 +574,92 @@ class TopDownVisualizer:
             background="#F8FAFC",
         )
 
-        agent_history: dict[int, list[tuple[Hashable, dict[str, int]]]] = {}
+        agent_history: dict[int, list[tuple[Hashable, dict[str, float]]]] = {}
 
         state = {
             "running": True,
             "steps": 0,
+            "render_count": 0,
             "after_id": None,
+            "worker_thread": None,
             "dashboard_window": dashboard_window,
             "dashboard_canvas": dashboard_canvas,
         }
+        tick_interval_seconds = max(0.001, interval_ms / 1000.0)
+        ui_interval_ms = max(16, min(66, self.LIVE_UI_REFRESH_MS))
+
+        def read_running() -> bool:
+            with state_lock:
+                return bool(state["running"])
+
+        def read_steps() -> int:
+            with state_lock:
+                return int(state["steps"])
 
         def current_status() -> str:
             if status_provider is None:
                 return ""
-            return status_provider(state["running"])
+            is_running = read_running()
+            with simulation_lock:
+                return status_provider(is_running)
 
-        def rerender():
-            entities = get_entities()
+        def simulation_loop() -> None:
+            next_tick_time = time.perf_counter()
+            while not stop_event.is_set():
+                if not read_running():
+                    next_tick_time = time.perf_counter()
+                    time.sleep(0.01)
+                    continue
+
+                if max_steps is not None and read_steps() >= max_steps:
+                    with state_lock:
+                        state["running"] = False
+                    continue
+
+                safe_step_once()
+                with state_lock:
+                    state["steps"] += 1
+                    reached_limit = max_steps is not None and state["steps"] >= max_steps
+                    if reached_limit:
+                        state["running"] = False
+
+                next_tick_time += tick_interval_seconds
+                sleep_for = next_tick_time - time.perf_counter()
+                if sleep_for > 0:
+                    time.sleep(min(sleep_for, 0.02))
+                else:
+                    next_tick_time = time.perf_counter()
+
+        def rerender(force_dashboard: bool = False):
+            entities = safe_get_entities()
             self.render(canvas, entities, status_text=current_status())
-            agents = self._record_agent_history(entities, agent_history, state["steps"])
+            step_key = read_steps()
+            agents = self._record_agent_history(entities, agent_history, step_key)
+            with state_lock:
+                state["render_count"] += 1
+                render_count = state["render_count"]
 
-            if state["dashboard_canvas"] is not None:
+            should_render_dashboard = force_dashboard or (
+                render_count % self.DASHBOARD_RENDER_EVERY == 0
+            )
+            if state["dashboard_canvas"] is not None and should_render_dashboard:
                 self.render_dashboard(state["dashboard_canvas"], agents, agent_history)
 
         def schedule_next():
-            if state["running"] and state["after_id"] is None:
-                state["after_id"] = root.after(interval_ms, tick)
+            with state_lock:
+                if state["after_id"] is None and not stop_event.is_set():
+                    state["after_id"] = root.after(ui_interval_ms, tick)
 
         def tick():
-            state["after_id"] = None
-            if not state["running"]:
-                return
-
-            if max_steps is not None and state["steps"] >= max_steps:
-                state["running"] = False
-                rerender()
-                return
-
-            step_once()
-            state["steps"] += 1
+            with state_lock:
+                state["after_id"] = None
             rerender()
             schedule_next()
 
         def toggle_running(event=None):
-            if state["running"]:
-                state["running"] = False
-                if state["after_id"] is not None:
-                    root.after_cancel(state["after_id"])
-                    state["after_id"] = None
-            else:
-                state["running"] = True
-                schedule_next()
-            rerender()
+            with state_lock:
+                state["running"] = not state["running"]
+            rerender(force_dashboard=True)
 
         def close_dashboard_window():
             if state["dashboard_window"] is None:
@@ -598,16 +669,32 @@ class TopDownVisualizer:
             state["dashboard_canvas"] = None
 
         def close_window():
-            if state["after_id"] is not None:
-                root.after_cancel(state["after_id"])
+            stop_event.set()
+            with state_lock:
+                after_id = state["after_id"]
                 state["after_id"] = None
+            if after_id is not None:
+                root.after_cancel(after_id)
+
+            worker_thread = state["worker_thread"]
+            if worker_thread is not None and worker_thread.is_alive():
+                worker_thread.join(timeout=1.0)
+
             if state["dashboard_window"] is not None:
                 state["dashboard_window"].destroy()
                 state["dashboard_window"] = None
                 state["dashboard_canvas"] = None
             root.destroy()
 
-        rerender()
+        worker_thread = threading.Thread(
+            target=simulation_loop,
+            name="simulation-loop",
+            daemon=True,
+        )
+        state["worker_thread"] = worker_thread
+        worker_thread.start()
+
+        rerender(force_dashboard=True)
         self._bind_navigation(root, rerender)
         root.bind("<Escape>", lambda _: close_window())
         root.bind("<space>", toggle_running)

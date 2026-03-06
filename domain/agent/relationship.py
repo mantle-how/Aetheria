@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-def _clamp_affinity(value: int) -> int:
-    return max(-100, min(100, int(value)))
+def _clamp_affinity(value: float) -> float:
+    return max(0.0, min(100.0, float(value)))
 
 
 @dataclass
@@ -12,14 +12,14 @@ class Relationship:
     """描述兩名代理人之間的一條社會連結。"""
 
     other_agent_id: int
-    affinity: int = 0
+    affinity: float = 0.0
     interactions: int = 0
 
-    def reinforce(self, gain: int) -> None:
+    def reinforce(self, gain: float) -> None:
         self.affinity = _clamp_affinity(self.affinity + gain)
         self.interactions += 1
 
-    def decay(self, loss: int) -> None:
+    def decay(self, loss: float) -> None:
         self.affinity = _clamp_affinity(self.affinity - loss)
 
 
@@ -36,14 +36,14 @@ class RelationshipLedger:
             self.links[other_agent_id] = relation
         return relation
 
-    def affinity_for(self, other_agent_id: int) -> int:
+    def affinity_for(self, other_agent_id: int) -> float:
         relation = self.links.get(other_agent_id)
-        return 0 if relation is None else relation.affinity
+        return 0.0 if relation is None else relation.affinity
 
-    def record_positive_interaction(self, other_agent_id: int, gain: int) -> None:
+    def record_positive_interaction(self, other_agent_id: int, gain: float) -> None:
         self.get_or_create(other_agent_id).reinforce(gain)
 
-    def record_negative_interaction(self, other_agent_id: int, loss: int) -> None:
+    def record_negative_interaction(self, other_agent_id: int, loss: float) -> None:
         self.get_or_create(other_agent_id).decay(loss)
 
     def strongest_bond(self, candidate_ids: list[int]) -> int | None:

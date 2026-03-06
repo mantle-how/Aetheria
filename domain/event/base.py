@@ -26,5 +26,7 @@ class SimulationEvent:
             "work": "工作",
             "socialize": "社交",
             "idle": "待命",
+            "birth": "誕生",
+            "death": "死亡",
         }.get(self.event_type, self.event_type)
         return f"[步次={self.tick:03d} 時間={hour:02d}:{minute:02d} {actor} {event_label}] {self.message}"

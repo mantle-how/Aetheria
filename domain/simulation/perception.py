@@ -17,6 +17,7 @@ class AgentPerception:
     current_place_id: str | None
     current_place_has_food: bool
     nearby_agents: tuple[ABMAgent, ...]
+    alive_agents: tuple[ABMAgent, ...]
     place_positions: dict[str, tuple[float, float]]
     nearest_food_place_id: str | None
 
@@ -55,6 +56,11 @@ class ABMSimulation:
             for place_id, place in self.world.places.items()
         }
         nearby_agents = tuple(self.world.get_agents_near(agent))
+        alive_agents = tuple(
+            other
+            for other in self.world.agents
+            if other.is_alive and other.agent_id != agent.agent_id
+        )
 
         return AgentPerception(
             tick=self.world.tick_count,
@@ -62,21 +68,42 @@ class ABMSimulation:
             current_place_id=None if current_place is None else current_place.place_id,
             current_place_has_food=False if current_place is None else current_place.has_food(),
             nearby_agents=nearby_agents,
+            alive_agents=alive_agents,
             place_positions=place_positions,
             nearest_food_place_id=self.world.nearest_food_place_id(agent),
         )
 
     def step(self) -> list[SimulationEvent]:
-        for agent in self.world.agents:
-            agent.needs.apply_passive_decay(self.world.rules.needs)
-
         events: list[SimulationEvent] = []
+
         for agent in self.world.agents:
+            if not agent.is_alive:
+                continue
+            agent.needs.apply_passive_decay(self.world.rules.needs)
+            if agent.apply_health_decay(self.world.rules, self.world.tick_count):
+                death_event = SimulationEvent(
+                    tick=self.world.tick_count,
+                    minute_of_day=self.world.minute_of_day,
+                    actor_id=agent.agent_id,
+                    event_type="death",
+                    message=f"{agent.name} 生命值歸零，已死亡。",
+                    payload={
+                        "health": agent.health,
+                        "needs": agent.needs.as_dict(),
+                        "death_tick": agent.death_tick,
+                    },
+                )
+                self.logger.record(death_event)
+                events.append(death_event)
+
+        alive_snapshot = [agent for agent in self.world.agents if agent.is_alive]
+        for agent in alive_snapshot:
             perception = self.build_perception(agent)
             intent = agent.decide_action(perception, self.world.rules)
-            _, event = self.world.execute_action(agent, intent)
-            self.logger.record(event)
-            events.append(event)
+            _, action_events = self.world.execute_action(agent, intent)
+            for event in action_events:
+                self.logger.record(event)
+                events.append(event)
 
         self.world.advance_time()
         return events

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import dist
 from typing import TYPE_CHECKING
 
 from domain.agent.need import NeedState
@@ -16,9 +17,7 @@ if TYPE_CHECKING:
 class ABMAgent:
     """ABM 模擬中的核心代理人。"""
 
-    FOOD_RESTOCK_TRIGGER: int = field(init=False, default=2, repr=False)
-    FOOD_RESTOCK_TARGET: int = field(init=False, default=5, repr=False)
-    FULL_REST_ENERGY: int = field(init=False, default=100, repr=False)
+    SOCIAL_COOLDOWN_TICKS: int = field(init=False, default=8, repr=False)
 
     agent_id: int
     name: str
@@ -32,8 +31,11 @@ class ABMAgent:
     food_inventory: int = 0
     relationships: RelationshipLedger = field(default_factory=RelationshipLedger)
     last_action: ActionType = ActionType.IDLE
-    is_restocking_food: bool = False
-    is_resting_until_full: bool = False
+    health: float = 100.0
+    is_alive: bool = True
+    death_tick: int | None = None
+    is_socializing_until_recovered: bool = False
+    social_cooldown_until_tick: int = 0
 
     @property
     def entity_id(self) -> int:
@@ -42,145 +44,160 @@ class ABMAgent:
         return self.agent_id
 
     def decide_action(self, perception: "AgentPerception", rules: "WorldRules") -> ActionIntent:
-        """用可預測的規則決定代理人的下一步。"""
+        """依照需求門檻與社交規則決定下一步。"""
 
-        self._refresh_behavior_flags(rules)
-        full_rest_energy = min(self.FULL_REST_ENERGY, rules.needs.max_value)
-        rest_exit_energy = self._rest_exit_energy(rules)
-
-        if self.is_resting_until_full:
-            if self.needs.energy >= rest_exit_energy:
-                self.is_resting_until_full = False
-            elif perception.current_place_id == self.home_place_id:
-                return ActionIntent(
-                    action_type=ActionType.REST,
-                    note="正在補眠，持續休息直到精力回滿。",
-                )
-            else:
-                return self._move_to_place(
-                    perception,
-                    self.home_place_id,
-                    "精力尚未回滿，先回家休息。",
-                )
-
-        if self.needs.hunger >= rules.population.high_hunger_threshold:
-            if self.food_inventory > 0 or perception.current_place_has_food:
-                return ActionIntent(
-                    action_type=ActionType.EAT,
-                    note="飢餓值過高，先處理進食。",
-                )
-
-        if self.is_restocking_food:
-            if perception.current_place_id == self.work_place_id:
-                return ActionIntent(
-                    action_type=ActionType.WORK,
-                    note="食物庫存不足，持續工作補到 5 份。",
-                )
-            return self._move_to_place(
-                perception,
-                self.work_place_id,
-                "食物庫存不足，前往工作地點補貨。",
+        if not self.is_alive:
+            return ActionIntent(
+                action_type=ActionType.IDLE,
+                note="代理人已死亡，無法行動。",
             )
 
-        if self.needs.hunger >= rules.population.high_hunger_threshold:
-            nearest_food_place_id = perception.nearest_food_place_id
-            if nearest_food_place_id is None:
-                if perception.current_place_id == self.work_place_id:
-                    return ActionIntent(
-                        action_type=ActionType.WORK,
-                        note="目前沒有可用食物，先工作換取食物。",
-                    )
-                return self._move_to_place(
-                    perception,
-                    self.work_place_id,
-                    "目前沒有可用食物，前往工作地點換取食物。",
-                )
-            return self._move_to_place(
-                perception,
-                nearest_food_place_id,
-                "前往可取得食物的地點。",
-            )
+        self._refresh_social_flag(rules)
 
-        if self.needs.energy <= rules.population.low_energy_threshold:
-            self.is_resting_until_full = True
+        if self.needs.energy < rules.population.rest_threshold:
             if perception.current_place_id == self.home_place_id:
                 return ActionIntent(
                     action_type=ActionType.REST,
-                    note="精力過低，開始補眠直到精力回滿。",
+                    note="精力低於門檻，優先休息。",
                 )
             return self._move_to_place(
                 perception,
                 self.home_place_id,
-                "精力過低，返回住處補眠。",
+                "精力低於門檻，前往住處休息。",
             )
 
-        if self.needs.mood <= rules.population.low_mood_threshold:
-            social_target = self._pick_social_target(perception)
-            if social_target is not None:
+        if self.needs.hunger < rules.population.eat_threshold:
+            if self.food_inventory > 0 or perception.current_place_has_food:
                 return ActionIntent(
-                    action_type=ActionType.SOCIALIZE,
-                    target_id=str(social_target.agent_id),
-                    note="心情偏低，尋找社交互動。",
+                    action_type=ActionType.EAT,
+                    note="飢餓低於門檻，優先進食。",
+                )
+
+            if perception.nearest_food_place_id is None:
+                return ActionIntent(
+                    action_type=ActionType.IDLE,
+                    note="飢餓偏低，但目前找不到食物來源。",
                 )
             return self._move_to_place(
                 perception,
-                self.social_place_id,
-                "前往社交空間。",
+                perception.nearest_food_place_id,
+                "飢餓低於門檻，前往最近可取得食物的地點。",
             )
 
-        if rules.is_work_time(perception.minute_of_day):
-            if perception.current_place_id == self.work_place_id:
-                return ActionIntent(
-                    action_type=ActionType.WORK,
-                    note="目前處於工作時段。",
-                )
-            return self._move_to_place(
-                perception,
-                self.work_place_id,
-                "前往工作地點。",
+        if self.is_socializing_until_recovered:
+            return self._recover_mood_routine(
+                perception=perception,
+                rules=rules,
+                socialize_note="心情低落中，持續社交恢復。",
+                move_note="心情低落中，前往社交空間。",
+                idle_note="心情低落中，在社交空間等待互動。",
             )
 
-        social_target = self._pick_social_target(perception)
-        if social_target is not None and perception.current_place_id == self.social_place_id:
-            return ActionIntent(
-                action_type=ActionType.SOCIALIZE,
-                target_id=str(social_target.agent_id),
-                note="空檔時間用來維持社交連結。",
-            )
+        return self._stable_routine(perception, rules)
 
+    def apply_health_decay(self, rules: "WorldRules", tick: int) -> bool:
+        """每 tick 扣生命值；回傳是否在本次 tick 死亡。"""
+
+        if not self.is_alive:
+            return False
+
+        self.health -= rules.population.passive_health_loss_per_tick
+        critical_threshold = rules.population.critical_need_threshold
+        if (
+            self.needs.hunger < critical_threshold
+            or self.needs.energy < critical_threshold
+            or self.needs.mood < critical_threshold
+        ):
+            self.health -= rules.population.critical_health_loss_per_tick
+
+        if self.health > 0:
+            return False
+
+        self.health = 0.0
+        self.is_alive = False
+        self.death_tick = tick
+        self.last_action = ActionType.IDLE
+        self.is_socializing_until_recovered = False
+        self.social_cooldown_until_tick = 0
+        return True
+
+    def _refresh_social_flag(self, rules: "WorldRules") -> None:
+        if self.needs.mood < rules.population.social_start_threshold:
+            self.is_socializing_until_recovered = True
+            return
+
+        if (
+            self.is_socializing_until_recovered
+            and self.needs.mood > rules.population.social_stop_threshold
+        ):
+            self.is_socializing_until_recovered = False
+
+    def _recover_mood_routine(
+        self,
+        perception: "AgentPerception",
+        rules: "WorldRules",
+        socialize_note: str,
+        move_note: str,
+        idle_note: str,
+    ) -> ActionIntent:
         if perception.current_place_id != self.social_place_id:
             return self._move_to_place(
                 perception,
                 self.social_place_id,
-                "沒有緊急需求，前往廣場活動。",
+                move_note,
+            )
+
+        if perception.tick < self.social_cooldown_until_tick:
+            return ActionIntent(
+                action_type=ActionType.IDLE,
+                note="社交冷卻中，暫時等待。",
+            )
+
+        target = self._pick_social_target(perception)
+        if target is None:
+            return ActionIntent(
+                action_type=ActionType.IDLE,
+                note=idle_note,
+            )
+
+        if dist((self.x, self.y), (target.x, target.y)) <= rules.world.interaction_radius:
+            return ActionIntent(
+                action_type=ActionType.SOCIALIZE,
+                target_id=str(target.agent_id),
+                note=socialize_note,
+            )
+
+        return ActionIntent(
+            action_type=ActionType.MOVE,
+            target_id=str(target.agent_id),
+            target_x=target.x,
+            target_y=target.y,
+            note="心情低落中，接近可社交對象。",
+        )
+
+    def _stable_routine(self, perception: "AgentPerception", rules: "WorldRules") -> ActionIntent:
+        if rules.is_work_time(perception.minute_of_day):
+            if perception.current_place_id == self.work_place_id:
+                return ActionIntent(
+                    action_type=ActionType.WORK,
+                    note="需求穩定，工作時段執行工作。",
+                )
+            return self._move_to_place(
+                perception,
+                self.work_place_id,
+                "需求穩定，前往工作站。",
+            )
+
+        if perception.current_place_id != self.home_place_id:
+            return self._move_to_place(
+                perception,
+                self.home_place_id,
+                "需求穩定，返回住家待命。",
             )
 
         return ActionIntent(
             action_type=ActionType.IDLE,
-            note="目前狀態穩定，暫時待命。",
-        )
-
-    def _refresh_behavior_flags(self, rules: "WorldRules") -> None:
-        rest_exit_energy = self._rest_exit_energy(rules)
-
-        if self.food_inventory < self.FOOD_RESTOCK_TRIGGER:
-            self.is_restocking_food = True
-        elif self.is_restocking_food and self.food_inventory >= self.FOOD_RESTOCK_TARGET:
-            self.is_restocking_food = False
-
-        if self.needs.energy <= rules.population.low_energy_threshold:
-            self.is_resting_until_full = True
-        elif self.is_resting_until_full and self.needs.energy >= rest_exit_energy:
-            self.is_resting_until_full = False
-
-    def _rest_exit_energy(self, rules: "WorldRules") -> int:
-        """補償每 tick 先扣被動精力，避免剛回滿就永遠卡在休息。"""
-
-        full_rest_energy = min(self.FULL_REST_ENERGY, rules.needs.max_value)
-        passive_loss = max(0, int(rules.needs.energy_loss_per_tick))
-        return max(
-            rules.population.low_energy_threshold + 1,
-            full_rest_energy - passive_loss,
+            note="需求穩定，於住家待命。",
         )
 
     def _move_to_place(
@@ -207,16 +224,17 @@ class ABMAgent:
         )
 
     def _pick_social_target(self, perception: "AgentPerception") -> ABMAgent | None:
-        """從附近代理人中優先挑選關係最佳者。"""
+        """優先從附近代理人中挑選心情值最低者，避免全員追逐同一目標。"""
 
         if not perception.nearby_agents:
             return None
 
-        candidate_ids = [candidate.agent_id for candidate in perception.nearby_agents]
-        preferred_id = self.relationships.strongest_bond(candidate_ids)
-        if preferred_id is not None:
-            for candidate in perception.nearby_agents:
-                if candidate.agent_id == preferred_id:
-                    return candidate
+        candidates = [
+            candidate
+            for candidate in perception.nearby_agents
+            if candidate.agent_id != self.agent_id and candidate.is_alive
+        ]
+        if not candidates:
+            return None
 
-        return min(perception.nearby_agents, key=lambda candidate: candidate.agent_id)
+        return min(candidates, key=lambda candidate: (candidate.needs.mood, candidate.agent_id))

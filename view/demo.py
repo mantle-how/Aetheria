@@ -9,16 +9,19 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from model.config import LoggingConfig, SimulationConfig
+from model.config import LoggingConfig, PopulationConfig, SimulationConfig
 from model.test import build_demo_simulation, simulation_to_entities
 from view.topdown import TopDownVisualizer
 
-TARGET_FPS = 5
+TARGET_FPS = 30
 FRAME_INTERVAL_MS = 1000 // TARGET_FPS
 
 
 def main() -> None:
-    config = SimulationConfig(logging=LoggingConfig(print_to_stdout=False))
+    config = SimulationConfig(
+        logging=LoggingConfig(print_to_stdout=False),
+        population=PopulationConfig(agent_count=50),
+    )
     simulation = build_demo_simulation(config)
     visualizer = TopDownVisualizer(width=900, height=700)
 
