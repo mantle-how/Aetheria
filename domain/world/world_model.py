@@ -168,8 +168,19 @@ class SimulationWorld:
 
     def _execute_rest(self, agent: ABMAgent, intent: ActionIntent) -> tuple[ActionOutcome, list[SimulationEvent]]:
         agent.needs.recover_from_rest(self.rules.needs)
-        if self.is_agent_at_place(agent, agent.home_place_id):
-            message = f"{agent.name} 在家中休息。"
+        if agent.rest_hunger_baseline is not None:
+            agent.needs.hunger = agent.rest_hunger_baseline
+        if agent.rest_mood_baseline is not None:
+            agent.needs.mood = agent.rest_mood_baseline
+        agent.needs.normalize(self.rules.needs)
+
+        rest_home_ids = [agent.home_place_id, *agent.parent_home_place_ids]
+        is_resting_at_home = any(
+            place_id and self.is_agent_at_place(agent, place_id)
+            for place_id in rest_home_ids
+        )
+        if is_resting_at_home:
+            message = f"{agent.name} 在住家休息。"
         else:
             message = f"{agent.name} 在外休息。"
         return self._single_event_result(agent, intent, True, message)
@@ -311,19 +322,39 @@ class SimulationWorld:
             (parent_a.x + parent_b.x) / 2.0,
             (parent_a.y + parent_b.y) / 2.0,
         )
+        parent_home_place_ids = tuple(
+            place_id
+            for place_id in (parent_a.home_place_id, parent_b.home_place_id)
+            if place_id in self.places
+        )
+        child_home_place_id = self._select_place_id(
+            *parent_home_place_ids,
+            kind="home",
+        )
+        child_work_place_id = self._select_place_id(
+            parent_a.work_place_id,
+            parent_b.work_place_id,
+            kind="work",
+        )
+        child_social_place_id = self._select_place_id(
+            parent_a.social_place_id,
+            parent_b.social_place_id,
+            kind="social",
+        )
         child = ABMAgent(
             agent_id=child_id,
             name=f"Agent_{child_id}",
             x=child_x,
             y=child_y,
             occupation="newborn",
-            home_place_id=parent_a.home_place_id,
-            work_place_id=parent_a.work_place_id,
-            social_place_id=parent_a.social_place_id,
+            home_place_id=child_home_place_id,
+            work_place_id=child_work_place_id,
+            social_place_id=child_social_place_id,
             needs=NeedState.from_config(self.rules.needs),
             food_inventory=0,
             health=self.rules.population.initial_health,
             is_alive=True,
+            parent_home_place_ids=parent_home_place_ids,
         )
         self.agents.append(child)
         self._agent_index[child.agent_id] = child
@@ -344,3 +375,20 @@ class SimulationWorld:
             return int(raw_value)
         except (TypeError, ValueError):
             return None
+
+    def _select_place_id(self, *preferred_ids: str, kind: str | None = None) -> str:
+        for place_id in preferred_ids:
+            if place_id and place_id in self.places:
+                place = self.places[place_id]
+                if kind is None or place.kind == kind:
+                    return place_id
+
+        if kind is not None:
+            for place in self.places.values():
+                if place.kind == kind:
+                    return place.place_id
+
+        if self.places:
+            return next(iter(self.places))
+
+        raise ValueError("世界中沒有可用地點。")

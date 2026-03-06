@@ -2,25 +2,23 @@
 
 `view/` 是展示層，負責把模擬資料畫出來，不應承載領域決策邏輯。
 
-目前使用 `tkinter` 提供兩個同步視覺化：
+目前預設路徑已切換為 Web 視覺化：
 
-- 上帝視角的 2D 俯視圖
-- 統一的代理人儀表板（需求線圖 + 食物剩餘）
+- `view/demo.py` 啟動 Uvicorn，對外提供 `apps/api/main.py`
+- 前端以 WebSocket 接收即時 snapshot，並在 Canvas 繪製 Topdown + Dashboard
 
 ## 檔案
 
-- `demo.py`：可直接執行的示範入口。
-- `topdown.py`：`TopDownVisualizer`，負責繪製、播放控制與多視窗同步更新。
+- `demo.py`：可直接執行的 Web 入口（FastAPI/Uvicorn）。
+- `topdown.py`：舊版 `tkinter` 視覺化（legacy/deprecated）。
 
 ## demo.py
 
-`view/demo.py` 的流程是：
+`view/demo.py` 會直接啟動 Web 服務，預設：
 
-1. 建立 `SimulationConfig`
-2. 建立示範模擬
-3. 建立 `TopDownVisualizer`
-4. 把實體、步進與狀態文字 callback 傳給 `show_live()`
-5. 同時開啟俯視圖主視窗與代理人儀表板視窗
+1. 後端模擬以 30 tick/s 推進。
+2. WebSocket `/ws/sim` 以 30 FPS 推送狀態。
+3. 前端在瀏覽器繪製俯視圖與代理人儀表板。
 
 常用啟動方式：
 
@@ -30,7 +28,7 @@ python view/demo.py
 
 ## topdown.py
 
-`TopDownVisualizer` 支援：
+`TopDownVisualizer`（舊版）支援：
 
 - `show(entities)`：顯示靜態畫面
 - `show_live(...)`：依時間間隔持續更新畫面，並同步更新代理人儀表板
@@ -44,7 +42,7 @@ python view/demo.py
 - 繪製圖例與狀態列
 - 在儀表板中為每位 agent 顯示：
   需求折線圖（飢餓、精力、心情）
-  食物剩餘數量與長條
+  生命值（HP）
   目前動作與即時數值
 - 儀表板卡片會依視窗寬度自動換列排列
 

@@ -79,6 +79,8 @@ class ABMSimulation:
         for agent in self.world.agents:
             if not agent.is_alive:
                 continue
+            agent.rest_hunger_baseline = agent.needs.hunger
+            agent.rest_mood_baseline = agent.needs.mood
             agent.needs.apply_passive_decay(self.world.rules.needs)
             if agent.apply_health_decay(self.world.rules, self.world.tick_count):
                 death_event = SimulationEvent(

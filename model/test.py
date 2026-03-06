@@ -72,6 +72,7 @@ class Agent(ABMAgent):
             last_action=ActionType.IDLE,
             health=float(health),
             is_alive=True,
+            parent_home_place_ids=(resolved_home_place_id,),
         )
         self.gender = gender
         self.years = years

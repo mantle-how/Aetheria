@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Legacy Tkinter visualizer (deprecated). Use Web UI at apps.api.main instead."""
+
 from collections.abc import Callable, Hashable
 import threading
 import time

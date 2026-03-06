@@ -1,13 +1,17 @@
-# api接收
+# Aetheria Demo Web API
+
 ## 簡介
- 負責接收api，區分用戶角色，並同意、拒絕對應操作
- * **admin:** 管理者，可以使用所有功能
- * **guest:** 訪客，只能操作自己的角色
+`apps/api/main.py` 提供 Web 視覺化所需的 API 與即時推流：
+- `GET /`：Web 前端頁面（Canvas Topdown + Dashboard）。
+- `WS /ws/sim`：30 FPS 推送模擬 snapshot，並接收控制指令。
 
-## api列表
+## 控制指令
+WebSocket 支援下列 JSON 指令：
+- `{"cmd":"play"}`
+- `{"cmd":"pause"}`
+- `{"cmd":"toggle"}`
+- `{"cmd":"step"}`
 
-## 資料夾分層
-* **router:** 路由分組(world,agent,event,admin,replay)
-* **schemes:** api request/ response dto
-* **deps.py:** di dbsession auth rate_limit
-* **main.py:** 入口
+## 執行方式
+1. `pip install -r requirements.txt`
+2. `python view/demo.py`

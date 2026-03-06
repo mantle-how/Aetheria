@@ -12,12 +12,11 @@
 
 `ABMAgent.decide_action()` 目前採用固定優先序：
 
-1. 飢餓過高時先嘗試進食；若沒有食物，就移動到可取得食物的地點。
-2. 精力過低時回家休息。
-3. 心情過低時優先社交；若沒有目標，就前往社交地點。
-4. 工作時段內前往工作地點並執行工作。
-5. 在沒有緊急需求時，傾向進行社交行為。
-6. 若沒有更合適的行動，則維持待機。
+1. `hunger < eat_threshold`：先嘗試進食；無食物則移動到最近食物來源。
+2. `energy < rest_threshold`：進入休息恢復狀態，回住家休息（自己住家優先，否則父母住家 fallback），直到 `energy > rest_stop_threshold` 才退出。休息當下 tick 不會扣減飢餓與心情。
+3. `food_inventory < food_restock_threshold`：前往工作站補糧，直到達標。
+4. `mood < social_start_threshold`（或恢復中）：尋找最低心情且目前閒置的存活代理人社交，直到 `mood > social_stop_threshold`。
+5. 若沒有更高優先行為，則維持 `IDLE`。
 
 ## NeedState
 
@@ -34,7 +33,7 @@
 
 ## 關係模型
 
-- `affinity` 會被限制在 `-100..100`。
+- `affinity` 會被限制在 `0..100`。
 - 正向社交互動會提升親和度。
 - 社交時未被選中的附近代理人，可能會受到小幅衰減。
 - `strongest_bond()` 可讓代理人優先選擇目前關係最好的社交對象。

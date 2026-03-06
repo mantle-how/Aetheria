@@ -1,0 +1,16 @@
+{
+  "name": "aetheria_demo",
+  "version": "1.0.0",
+  "description": "人類對於「觀察者（Observer）」的角色天生具有深層的好奇心。從《模擬市民》到《WorldBox》，玩家始終著迷於以上帝視角俯瞰虛擬生命的演化。然而，傳統遊戲的 NPC 行為受限於預設程式碼（Hard-coded Scripts），缺乏真正的自主性與不可預測性。 我們希望打破這個限制，利用大型語言模型（LLM）賦予角色「認知」與「記憶」。我們想創造的不僅僅是遊戲，而是一個**「微縮的數位社會實驗場」**。在這裡，每個角色都是獨立的智慧體，他們會思考、會社交、會愛恨情仇，而使用者將體驗真正的「上帝視角」，觀察這群數位生命如何在無人干預下，碰撞出意想不到的文明火花。",
+  "main": "playwright.config.js",
+  "scripts": {
+    "e2e:smoke": "node e2e/playwright_smoke.cjs",
+    "e2e:test": "playwright test --config=playwright.config.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

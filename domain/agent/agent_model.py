@@ -35,7 +35,12 @@ class ABMAgent:
     is_alive: bool = True
     death_tick: int | None = None
     is_socializing_until_recovered: bool = False
+    is_resting_until_recovered: bool = False
     social_cooldown_until_tick: int = 0
+    parent_home_place_ids: tuple[str, ...] = ()
+    is_restocking_food: bool = False
+    rest_hunger_baseline: float | None = None
+    rest_mood_baseline: float | None = None
 
     @property
     def entity_id(self) -> int:
@@ -44,7 +49,7 @@ class ABMAgent:
         return self.agent_id
 
     def decide_action(self, perception: "AgentPerception", rules: "WorldRules") -> ActionIntent:
-        """依照需求門檻與社交規則決定下一步。"""
+        """依照固定優先序決定下一步：進食 > 休息 > 補糧 > 社交 > 待命。"""
 
         if not self.is_alive:
             return ActionIntent(
@@ -53,47 +58,25 @@ class ABMAgent:
             )
 
         self._refresh_social_flag(rules)
-
-        if self.needs.energy < rules.population.rest_threshold:
-            if perception.current_place_id == self.home_place_id:
-                return ActionIntent(
-                    action_type=ActionType.REST,
-                    note="精力低於門檻，優先休息。",
-                )
-            return self._move_to_place(
-                perception,
-                self.home_place_id,
-                "精力低於門檻，前往住處休息。",
-            )
+        self._refresh_restock_flag(rules)
+        self._refresh_rest_flag(rules)
 
         if self.needs.hunger < rules.population.eat_threshold:
-            if self.food_inventory > 0 or perception.current_place_has_food:
-                return ActionIntent(
-                    action_type=ActionType.EAT,
-                    note="飢餓低於門檻，優先進食。",
-                )
+            return self._eat_routine(perception)
 
-            if perception.nearest_food_place_id is None:
-                return ActionIntent(
-                    action_type=ActionType.IDLE,
-                    note="飢餓偏低，但目前找不到食物來源。",
-                )
-            return self._move_to_place(
-                perception,
-                perception.nearest_food_place_id,
-                "飢餓低於門檻，前往最近可取得食物的地點。",
-            )
+        if self.is_resting_until_recovered:
+            return self._rest_routine(perception)
+
+        if self.is_restocking_food:
+            return self._restock_food_routine(perception)
 
         if self.is_socializing_until_recovered:
-            return self._recover_mood_routine(
-                perception=perception,
-                rules=rules,
-                socialize_note="心情低落中，持續社交恢復。",
-                move_note="心情低落中，前往社交空間。",
-                idle_note="心情低落中，在社交空間等待互動。",
-            )
+            return self._socialize_routine(perception, rules)
 
-        return self._stable_routine(perception, rules)
+        return ActionIntent(
+            action_type=ActionType.IDLE,
+            note="需求穩定，維持待命。",
+        )
 
     def apply_health_decay(self, rules: "WorldRules", tick: int) -> bool:
         """每 tick 扣生命值；回傳是否在本次 tick 死亡。"""
@@ -118,8 +101,22 @@ class ABMAgent:
         self.death_tick = tick
         self.last_action = ActionType.IDLE
         self.is_socializing_until_recovered = False
+        self.is_resting_until_recovered = False
         self.social_cooldown_until_tick = 0
+        self.is_restocking_food = False
         return True
+
+    def resolve_rest_home_place_id(self, place_positions: dict[str, tuple[float, float]]) -> str | None:
+        """休息地點：自己住家優先，否則依序 fallback 父母住家。"""
+
+        if self.home_place_id in place_positions:
+            return self.home_place_id
+
+        for place_id in self.parent_home_place_ids:
+            if place_id and place_id in place_positions:
+                return place_id
+
+        return None
 
     def _refresh_social_flag(self, rules: "WorldRules") -> None:
         if self.needs.mood < rules.population.social_start_threshold:
@@ -132,21 +129,77 @@ class ABMAgent:
         ):
             self.is_socializing_until_recovered = False
 
-    def _recover_mood_routine(
-        self,
-        perception: "AgentPerception",
-        rules: "WorldRules",
-        socialize_note: str,
-        move_note: str,
-        idle_note: str,
-    ) -> ActionIntent:
-        if perception.current_place_id != self.social_place_id:
-            return self._move_to_place(
-                perception,
-                self.social_place_id,
-                move_note,
+    def _refresh_rest_flag(self, rules: "WorldRules") -> None:
+        if self.needs.energy < rules.population.rest_threshold:
+            self.is_resting_until_recovered = True
+            return
+
+        if (
+            self.is_resting_until_recovered
+            and self.needs.energy > rules.population.rest_stop_threshold
+        ):
+            self.is_resting_until_recovered = False
+
+    def _refresh_restock_flag(self, rules: "WorldRules") -> None:
+        threshold = rules.population.food_restock_threshold
+        if self.food_inventory < threshold:
+            self.is_restocking_food = True
+        elif self.food_inventory >= threshold:
+            self.is_restocking_food = False
+
+    def _eat_routine(self, perception: "AgentPerception") -> ActionIntent:
+        if self.food_inventory > 0 or perception.current_place_has_food:
+            return ActionIntent(
+                action_type=ActionType.EAT,
+                note="飢餓低於門檻，優先進食。",
             )
 
+        if perception.nearest_food_place_id is None:
+            return ActionIntent(
+                action_type=ActionType.IDLE,
+                note="飢餓偏低，但目前找不到食物來源。",
+            )
+
+        return self._move_to_place(
+            perception,
+            perception.nearest_food_place_id,
+            "飢餓低於門檻，前往最近可取得食物的地點。",
+        )
+
+    def _rest_routine(self, perception: "AgentPerception") -> ActionIntent:
+        rest_home_place_id = self.resolve_rest_home_place_id(perception.place_positions)
+        if rest_home_place_id is None:
+            return ActionIntent(
+                action_type=ActionType.REST,
+                note="精力恢復中，但住家不存在，先原地休息。",
+            )
+
+        if perception.current_place_id == rest_home_place_id:
+            return ActionIntent(
+                action_type=ActionType.REST,
+                note="精力恢復中，於住家持續休息。",
+            )
+
+        return self._move_to_place(
+            perception,
+            rest_home_place_id,
+            "精力恢復中，返回住家持續休息。",
+        )
+
+    def _restock_food_routine(self, perception: "AgentPerception") -> ActionIntent:
+        if perception.current_place_id == self.work_place_id:
+            return ActionIntent(
+                action_type=ActionType.WORK,
+                note="食物庫存低於補糧門檻，執行工作補糧。",
+            )
+
+        return self._move_to_place(
+            perception,
+            self.work_place_id,
+            "食物庫存低於補糧門檻，前往工作站補糧。",
+        )
+
+    def _socialize_routine(self, perception: "AgentPerception", rules: "WorldRules") -> ActionIntent:
         if perception.tick < self.social_cooldown_until_tick:
             return ActionIntent(
                 action_type=ActionType.IDLE,
@@ -155,16 +208,23 @@ class ABMAgent:
 
         target = self._pick_social_target(perception)
         if target is None:
-            return ActionIntent(
-                action_type=ActionType.IDLE,
-                note=idle_note,
+            if perception.current_place_id == self.social_place_id:
+                return ActionIntent(
+                    action_type=ActionType.IDLE,
+                    note="心情低落中，在社交空間等待互動。",
+                )
+            return self._move_to_place(
+                perception,
+                self.social_place_id,
+                "心情低落中，前往社交空間。",
             )
 
-        if dist((self.x, self.y), (target.x, target.y)) <= rules.world.interaction_radius:
+        target_distance = dist((self.x, self.y), (target.x, target.y))
+        if target_distance <= rules.world.interaction_radius:
             return ActionIntent(
                 action_type=ActionType.SOCIALIZE,
                 target_id=str(target.agent_id),
-                note=socialize_note,
+                note="心情低落中，進行社交恢復。",
             )
 
         return ActionIntent(
@@ -172,32 +232,7 @@ class ABMAgent:
             target_id=str(target.agent_id),
             target_x=target.x,
             target_y=target.y,
-            note="心情低落中，接近可社交對象。",
-        )
-
-    def _stable_routine(self, perception: "AgentPerception", rules: "WorldRules") -> ActionIntent:
-        if rules.is_work_time(perception.minute_of_day):
-            if perception.current_place_id == self.work_place_id:
-                return ActionIntent(
-                    action_type=ActionType.WORK,
-                    note="需求穩定，工作時段執行工作。",
-                )
-            return self._move_to_place(
-                perception,
-                self.work_place_id,
-                "需求穩定，前往工作站。",
-            )
-
-        if perception.current_place_id != self.home_place_id:
-            return self._move_to_place(
-                perception,
-                self.home_place_id,
-                "需求穩定，返回住家待命。",
-            )
-
-        return ActionIntent(
-            action_type=ActionType.IDLE,
-            note="需求穩定，於住家待命。",
+            note="心情低落中，接近最低心情且閒置的對象。",
         )
 
     def _move_to_place(
@@ -224,17 +259,25 @@ class ABMAgent:
         )
 
     def _pick_social_target(self, perception: "AgentPerception") -> ABMAgent | None:
-        """優先從附近代理人中挑選心情值最低者，避免全員追逐同一目標。"""
-
-        if not perception.nearby_agents:
-            return None
+        """從其餘存活且閒置的代理人中挑選心情最低者。"""
 
         candidates = [
             candidate
-            for candidate in perception.nearby_agents
-            if candidate.agent_id != self.agent_id and candidate.is_alive
+            for candidate in perception.alive_agents
+            if (
+                candidate.agent_id != self.agent_id
+                and candidate.is_alive
+                and candidate.last_action == ActionType.IDLE
+            )
         ]
         if not candidates:
             return None
 
-        return min(candidates, key=lambda candidate: (candidate.needs.mood, candidate.agent_id))
+        return min(
+            candidates,
+            key=lambda candidate: (
+                candidate.needs.mood,
+                dist((self.x, self.y), (candidate.x, candidate.y)),
+                candidate.agent_id,
+            ),
+        )

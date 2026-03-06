@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aetheria Demo Web</title>
+  <style>
+    :root {
+      --bg: #f3f6fb;
+      --panel: #ffffff;
+      --border: #c9d3e0;
+      --text: #0f172a;
+      --muted: #546175;
+      --accent: #0f766e;
+      --danger: #c62828;
+      --card-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+      --font: "Noto Sans TC", "Microsoft JhengHei UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--text);
+      background: radial-gradient(circle at 15% 10%, #e5efff 0%, var(--bg) 52%, #e8f5f2 100%);
+      min-height: 100vh;
+    }
+
+    .app-shell {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 18px 18px 22px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .toolbar {
+      background: linear-gradient(135deg, #ffffff 0%, #f3f8ff 64%, #ecf9f4 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--card-shadow);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .title {
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      font-size: 1.05rem;
+      margin: 0;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid #94a3b8;
+      background: #ffffff;
+      color: var(--text);
+      border-radius: 9px;
+      padding: 7px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: var(--font);
+      transition: transform 80ms ease, background-color 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: #f7fbff;
+    }
+
+    button.primary {
+      border-color: #0f766e;
+      color: #ffffff;
+      background: linear-gradient(135deg, #0f766e, #0b9f92);
+    }
+
+    .status-line {
+      font-size: 0.9rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--card-shadow);
+      overflow: hidden;
+    }
+
+    .panel-title {
+      padding: 9px 14px;
+      font-weight: 800;
+      font-size: 0.95rem;
+      color: #1e293b;
+      border-bottom: 1px solid #dce4ef;
+      background: #f8fbff;
+    }
+
+    .panel-body {
+      padding: 10px;
+    }
+
+    .canvas-wrap {
+      width: 100%;
+      overflow: auto;
+    }
+
+    canvas {
+      display: block;
+      background: #f9fbff;
+      border: 1px solid #d5dfeb;
+      border-radius: 10px;
+    }
+
+    #topdownCanvas {
+      width: 100%;
+      height: 560px;
+    }
+
+    #dashboardCanvas {
+      min-height: 420px;
+    }
+
+    .legend {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.83rem;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .legend-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <section class="toolbar">
+      <h1 class="title">Aetheria Demo 即時模擬 (WebSocket / 30 tick/s)</h1>
+      <div class="controls">
+        <button id="playPauseBtn" class="primary">暫停</button>
+        <button id="stepBtn">單步</button>
+        <button id="reconnectBtn">重連</button>
+      </div>
+      <div id="statusLine" class="status-line">連線中...</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Topdown 世界視圖</div>
+      <div class="panel-body">
+        <div class="canvas-wrap">
+          <canvas id="topdownCanvas"></canvas>
+        </div>
+        <div class="legend">
+          <span><span class="legend-dot" style="background:#1d4ed8"></span>住家</span>
+          <span><span class="legend-dot" style="background:#15803d"></span>工作站</span>
+          <span><span class="legend-dot" style="background:#c2410c"></span>市集</span>
+          <span><span class="legend-dot" style="background:#7c3aed"></span>廣場</span>
+          <span><span class="legend-dot" style="background:#dc2626"></span>存活代理人</span>
+          <span><span class="legend-dot" style="background:#6b7280"></span>死亡代理人</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">代理人儀表板 (每欄固定 5 人)</div>
+      <div class="panel-body">
+        <div class="canvas-wrap" id="dashboardScroll">
+          <canvas id="dashboardCanvas"></canvas>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const topdownCanvas = document.getElementById("topdownCanvas");
+    const dashboardCanvas = document.getElementById("dashboardCanvas");
+    const dashboardScroll = document.getElementById("dashboardScroll");
+    const statusLine = document.getElementById("statusLine");
+    const playPauseBtn = document.getElementById("playPauseBtn");
+    const stepBtn = document.getElementById("stepBtn");
+    const reconnectBtn = document.getElementById("reconnectBtn");
+
+    const placeColors = {
+      home: "#1d4ed8",
+      work: "#15803d",
+      food: "#c2410c",
+      social: "#7c3aed",
+    };
+    const needColors = {
+      hunger: "#f59e0b",
+      energy: "#16a34a",
+      mood: "#2563eb",
+    };
+    const actionLabel = {
+      move: "移動",
+      eat: "進食",
+      rest: "休息",
+      work: "工作",
+      socialize: "社交",
+      idle: "待命",
+    };
+
+    const HISTORY_LIMIT = 60;
+    const AGENTS_PER_COLUMN = 5;
+    const topdownPos = new Map();
+    const needHistory = new Map();
+    let latestSnapshot = null;
+    let socket = null;
+    let reconnectTimer = null;
+    let renderFps = 0;
+    let renderFrames = 0;
+    let fpsLastTime = performance.now();
+
+    function minuteToClock(minuteOfDay) {
+      const hour = Math.floor(minuteOfDay / 60) % 24;
+      const minute = minuteOfDay % 60;
+      return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    }
+
+    function updateStatus() {
+      if (!latestSnapshot) {
+        statusLine.textContent = "等待伺服器資料...";
+        return;
+      }
+      const stats = latestSnapshot.stats;
+      const runningText = stats.running ? "播放中" : "已暫停";
+      statusLine.textContent = [
+        `Tick ${latestSnapshot.tick}`,
+        `時間 ${minuteToClock(latestSnapshot.minute_of_day)}`,
+        `狀態 ${runningText}`,
+        `存活 ${stats.alive_count}/${stats.agent_count}`,
+        `平均 HP ${stats.average_health.toFixed(2)}`,
+        `Render ${renderFps.toFixed(1)} FPS`,
+      ].join("  |  ");
+      playPauseBtn.textContent = stats.running ? "暫停" : "播放";
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connectSocket();
+      }, 1500);
+    }
+
+    function connectSocket() {
+      if (socket !== null) {
+        try {
+          socket.close();
+        } catch (error) {
+          console.error(error);
+        }
+      }
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${protocol}://${window.location.host}/ws/sim`);
+      statusLine.textContent = "連線中...";
+
+      socket.addEventListener("open", () => {
+        statusLine.textContent = "已連線，等待狀態資料...";
+      });
+
+      socket.addEventListener("message", (event) => {
+        const snapshot = JSON.parse(event.data);
+        latestSnapshot = snapshot;
+        syncPositionTargets(snapshot.agents);
+        updateNeedHistory(snapshot.agents);
+        updateStatus();
+      });
+
+      socket.addEventListener("close", () => {
+        statusLine.textContent = "連線中斷，準備重連...";
+        scheduleReconnect();
+      });
+
+      socket.addEventListener("error", () => {
+        statusLine.textContent = "WebSocket 錯誤，準備重連...";
+        scheduleReconnect();
+      });
+    }
+
+    function sendCommand(cmd) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      socket.send(JSON.stringify({ cmd }));
+    }
+
+    function syncPositionTargets(agents) {
+      const activeIds = new Set();
+      for (const agent of agents) {
+        activeIds.add(agent.agent_id);
+        const existing = topdownPos.get(agent.agent_id);
+        if (!existing) {
+          topdownPos.set(agent.agent_id, { x: agent.x, y: agent.y, tx: agent.x, ty: agent.y });
+        } else {
+          existing.tx = agent.x;
+          existing.ty = agent.y;
+        }
+      }
+      for (const [agentId] of topdownPos.entries()) {
+        if (!activeIds.has(agentId)) {
+          topdownPos.delete(agentId);
+        }
+      }
+    }
+
+    function updateNeedHistory(agents) {
+      for (const agent of agents) {
+        const history = needHistory.get(agent.agent_id) || [];
+        history.push({
+          hunger: Number(agent.needs.hunger),
+          energy: Number(agent.needs.energy),
+          mood: Number(agent.needs.mood),
+        });
+        if (history.length > HISTORY_LIMIT) {
+          history.splice(0, history.length - HISTORY_LIMIT);
+        }
+        needHistory.set(agent.agent_id, history);
+      }
+    }
+
+    function computeBounds(snapshot) {
+      const xs = [];
+      const ys = [];
+      for (const place of snapshot.places) {
+        xs.push(place.x);
+        ys.push(place.y);
+      }
+      for (const agent of snapshot.agents) {
+        const pos = topdownPos.get(agent.agent_id) || { x: agent.x, y: agent.y };
+        xs.push(pos.x);
+        ys.push(pos.y);
+      }
+      if (xs.length === 0) {
+        return { minX: 0, maxX: 100, minY: 0, maxY: 100 };
+      }
+      let minX = Math.min(...xs);
+      let maxX = Math.max(...xs);
+      let minY = Math.min(...ys);
+      let maxY = Math.max(...ys);
+      if (minX === maxX) {
+        minX -= 1;
+        maxX += 1;
+      }
+      if (minY === maxY) {
+        minY -= 1;
+        maxY += 1;
+      }
+      const dx = maxX - minX;
+      const dy = maxY - minY;
+      return {
+        minX: minX - dx * 0.1,
+        maxX: maxX + dx * 0.1,
+        minY: minY - dy * 0.1,
+        maxY: maxY + dy * 0.1,
+      };
+    }
+
+    function worldToScreen(x, y, bounds, width, height) {
+      const margin = 22;
+      const w = bounds.maxX - bounds.minX;
+      const h = bounds.maxY - bounds.minY;
+      const sx = margin + ((x - bounds.minX) / w) * (width - margin * 2);
+      const sy = height - margin - ((y - bounds.minY) / h) * (height - margin * 2);
+      return [sx, sy];
+    }
+
+    function fitCanvas(canvas, cssWidth, cssHeight) {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const width = Math.max(1, Math.round(cssWidth));
+      const height = Math.max(1, Math.round(cssHeight));
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return ctx;
+    }
+
+    function drawTopdown(snapshot) {
+      const panelWidth = topdownCanvas.parentElement.clientWidth - 4;
+      const panelHeight = 560;
+      const ctx = fitCanvas(topdownCanvas, panelWidth, panelHeight);
+      const width = panelWidth;
+      const height = panelHeight;
+      const bounds = computeBounds(snapshot);
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#f8fbff";
+      ctx.fillRect(0, 0, width, height);
+
+      for (const place of snapshot.places) {
+        const [px, py] = worldToScreen(place.x, place.y, bounds, width, height);
+        ctx.fillStyle = placeColors[place.kind] || "#64748b";
+        ctx.fillRect(px - 5, py - 5, 10, 10);
+      }
+
+      for (const agent of snapshot.agents) {
+        const pos = topdownPos.get(agent.agent_id);
+        if (!pos) {
+          continue;
+        }
+        pos.x += (pos.tx - pos.x) * 0.36;
+        pos.y += (pos.ty - pos.y) * 0.36;
+        const [px, py] = worldToScreen(pos.x, pos.y, bounds, width, height);
+
+        ctx.fillStyle = agent.is_alive ? "#dc2626" : "#6b7280";
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#1f2937";
+        ctx.font = "11px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
+        ctx.fillText(`${agent.name}(${agent.agent_id})`, px + 7, py - 7);
+      }
+
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "bold 13px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
+      ctx.fillText(`Tick ${snapshot.tick} / 時間 ${minuteToClock(snapshot.minute_of_day)}`, 14, 20);
+    }
+
+    function drawNeedSeries(ctx, history, key, color, left, top, width, height) {
+      if (!history || history.length === 0) {
+        return;
+      }
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.8;
+      for (let index = 0; index < history.length; index += 1) {
+        const item = history[index];
+        const ratioX = history.length <= 1 ? 0.5 : index / (history.length - 1);
+        const ratioY = Math.max(0, Math.min(1, Number(item[key]) / 100.0));
+        const x = left + ratioX * width;
+        const y = top + (1 - ratioY) * height;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    function drawDashboard(snapshot) {
+      const agents = [...snapshot.agents].sort((a, b) => a.agent_id - b.agent_id);
+      const columns = Math.max(1, Math.ceil(agents.length / AGENTS_PER_COLUMN));
+      const rows = Math.max(1, Math.min(AGENTS_PER_COLUMN, agents.length));
+      const cardWidth = 330;
+      const cardHeight = 176;
+      const gap = 12;
+      const margin = 14;
+      const requiredWidth = margin * 2 + columns * cardWidth + Math.max(0, columns - 1) * gap;
+      const requiredHeight = margin * 2 + rows * cardHeight + Math.max(0, rows - 1) * gap;
+      const canvasWidth = Math.max(requiredWidth, dashboardScroll.clientWidth - 4);
+      const canvasHeight = Math.max(requiredHeight, 400);
+      const ctx = fitCanvas(dashboardCanvas, canvasWidth, canvasHeight);
+
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      ctx.fillStyle = "#f8fbff";
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      for (let index = 0; index < agents.length; index += 1) {
+        const agent = agents[index];
+        const col = Math.floor(index / AGENTS_PER_COLUMN);
+        const row = index % AGENTS_PER_COLUMN;
+        const left = margin + col * (cardWidth + gap);
+        const top = margin + row * (cardHeight + gap);
+        const right = left + cardWidth;
+        const bottom = top + cardHeight;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#ccd8e7";
+        ctx.lineWidth = 1;
+        ctx.fillRect(left, top, cardWidth, cardHeight);
+        ctx.strokeRect(left, top, cardWidth, cardHeight);
+
+        const hp = Number(agent.health);
+        const hpRatio = Math.max(0, Math.min(1, hp / 100));
+        const aliveText = agent.is_alive ? "存活" : "死亡";
+        const actionText = actionLabel[agent.last_action] || "-";
+
+        ctx.fillStyle = "#0f172a";
+        ctx.font = "bold 12px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
+        ctx.fillText(`${agent.name} (#${agent.agent_id})`, left + 10, top + 18);
+
+        ctx.fillStyle = "#334155";
+        ctx.font = "11px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
+        ctx.fillText(`動作: ${actionText}  狀態: ${aliveText}`, left + 10, top + 35);
+        ctx.fillText(`HP: ${hp.toFixed(2)}`, right - 84, top + 35);
+
+        const hpLeft = left + 10;
+        const hpTop = top + 44;
+        const hpWidth = cardWidth - 20;
+        const hpHeight = 12;
+        ctx.fillStyle = "#e2e8f0";
+        ctx.fillRect(hpLeft, hpTop, hpWidth, hpHeight);
+        if (hpRatio > 0) {
+          ctx.fillStyle = hpRatio >= 0.6 ? "#22c55e" : hpRatio >= 0.3 ? "#f59e0b" : "#ef4444";
+          ctx.fillRect(hpLeft, hpTop, hpWidth * hpRatio, hpHeight);
+        }
+
+        const needs = agent.needs;
+        ctx.fillStyle = "#475569";
+        ctx.font = "11px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
+        ctx.fillText(
+          `飢餓 ${Number(needs.hunger).toFixed(2)}  精力 ${Number(needs.energy).toFixed(2)}  心情 ${Number(needs.mood).toFixed(2)}`,
+          left + 10,
+          top + 72
+        );
+
+        const chartLeft = left + 10;
+        const chartTop = top + 82;
+        const chartWidth = cardWidth - 20;
+        const chartHeight = cardHeight - 92;
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(chartLeft, chartTop, chartWidth, chartHeight);
+        ctx.strokeStyle = "#e2e8f0";
+        ctx.strokeRect(chartLeft, chartTop, chartWidth, chartHeight);
+
+        const history = needHistory.get(agent.agent_id) || [];
+        drawNeedSeries(ctx, history, "hunger", needColors.hunger, chartLeft, chartTop, chartWidth, chartHeight);
+        drawNeedSeries(ctx, history, "energy", needColors.energy, chartLeft, chartTop, chartWidth, chartHeight);
+        drawNeedSeries(ctx, history, "mood", needColors.mood, chartLeft, chartTop, chartWidth, chartHeight);
+      }
+    }
+
+    function renderFrame(now) {
+      renderFrames += 1;
+      if (now - fpsLastTime >= 1000) {
+        renderFps = (renderFrames * 1000) / (now - fpsLastTime);
+        renderFrames = 0;
+        fpsLastTime = now;
+      }
+
+      if (latestSnapshot) {
+        drawTopdown(latestSnapshot);
+        drawDashboard(latestSnapshot);
+      }
+      updateStatus();
+      requestAnimationFrame(renderFrame);
+    }
+
+    playPauseBtn.addEventListener("click", () => sendCommand("toggle"));
+    stepBtn.addEventListener("click", () => sendCommand("step"));
+    reconnectBtn.addEventListener("click", () => connectSocket());
+    window.addEventListener("resize", () => {
+      if (latestSnapshot) {
+        drawTopdown(latestSnapshot);
+        drawDashboard(latestSnapshot);
+      }
+    });
+
+    connectSocket();
+    requestAnimationFrame(renderFrame);
+  </script>
+</body>
+</html>

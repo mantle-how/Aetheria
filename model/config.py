@@ -40,8 +40,8 @@ class NeedConfig:
     energy_decay_per_tick: float = 0.01
     mood_decay_per_tick: float = 0.05
     eat_hunger_recovery: float = 50.0
-    rest_energy_recovery: float = 0.02
-    social_mood_recovery: float = 0.12
+    rest_energy_recovery: float = 0.2
+    social_mood_recovery: float = 0.5
     work_hunger_decay: float = 0.0
     work_energy_decay: float = 0.0
     move_energy_decay: float = 0.0
@@ -97,9 +97,11 @@ class WorldConfig:
 class PopulationConfig:
     agent_count: int = 5
     initial_food_per_agent: int = 2
+    food_restock_threshold: int = 6
     workplace_food_reward: int = 2
     eat_threshold: float = 50.0
     rest_threshold: float = 10.0
+    rest_stop_threshold: float = 90.0
     social_start_threshold: float = 80.0
     social_stop_threshold: float = 95.0
     social_affinity_gain_active: int = 10
@@ -108,7 +110,7 @@ class PopulationConfig:
     initial_health: float = 100.0
     critical_need_threshold: float = 1.0
     critical_health_loss_per_tick: float = 1.0
-    passive_health_loss_per_tick: float = 0.0000002
+    passive_health_loss_per_tick: float = 0.00002
     work_start_minute: int = 9 * 60
     work_end_minute: int = 17 * 60
 
@@ -116,6 +118,7 @@ class PopulationConfig:
         int_fields = {
             "agent_count": self.agent_count,
             "initial_food_per_agent": self.initial_food_per_agent,
+            "food_restock_threshold": self.food_restock_threshold,
             "workplace_food_reward": self.workplace_food_reward,
             "social_affinity_gain_active": self.social_affinity_gain_active,
             "social_affinity_gain_passive": self.social_affinity_gain_passive,
@@ -126,9 +129,13 @@ class PopulationConfig:
         for field_name, field_value in int_fields.items():
             _ensure_int(f"PopulationConfig.{field_name}", field_value, 0)
 
+        if self.food_restock_threshold < 1:
+            raise ValueError("PopulationConfig.food_restock_threshold 必須大於等於 1。")
+
         float_fields = {
             "eat_threshold": self.eat_threshold,
             "rest_threshold": self.rest_threshold,
+            "rest_stop_threshold": self.rest_stop_threshold,
             "social_start_threshold": self.social_start_threshold,
             "social_stop_threshold": self.social_stop_threshold,
             "initial_health": self.initial_health,
@@ -143,6 +150,8 @@ class PopulationConfig:
             raise ValueError("PopulationConfig.agent_count 至少要是 2，才能形成多代理人系統。")
         if self.work_start_minute >= 24 * 60 or self.work_end_minute >= 24 * 60:
             raise ValueError("PopulationConfig 的工作時間必須落在單日範圍內。")
+        if self.rest_stop_threshold < self.rest_threshold:
+            raise ValueError("PopulationConfig.rest_stop_threshold 不可小於 rest_threshold。")
         if self.social_stop_threshold < self.social_start_threshold:
             raise ValueError("PopulationConfig.social_stop_threshold 不可小於 social_start_threshold。")
 
