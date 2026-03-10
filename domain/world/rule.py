@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 
-from model.config import SimulationConfig
+from domain.simulation.config import SimulationConfig
 
 
 @dataclass(frozen=True)

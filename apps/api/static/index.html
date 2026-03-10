@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -87,6 +87,12 @@
       background: linear-gradient(135deg, #0f766e, #0b9f92);
     }
 
+    button.danger {
+      border-color: #b91c1c;
+      color: #ffffff;
+      background: linear-gradient(135deg, #b91c1c, #dc2626);
+    }
+
     .status-line {
       font-size: 0.9rem;
       color: var(--muted);
@@ -161,6 +167,7 @@
       <div class="controls">
         <button id="playPauseBtn" class="primary">暫停</button>
         <button id="stepBtn">單步</button>
+        <button id="resetBtn" class="danger">重置世界</button>
         <button id="reconnectBtn">重連</button>
       </div>
       <div id="statusLine" class="status-line">連線中...</div>
@@ -200,6 +207,7 @@
     const statusLine = document.getElementById("statusLine");
     const playPauseBtn = document.getElementById("playPauseBtn");
     const stepBtn = document.getElementById("stepBtn");
+    const resetBtn = document.getElementById("resetBtn");
     const reconnectBtn = document.getElementById("reconnectBtn");
 
     const placeColors = {
@@ -227,6 +235,7 @@
     const topdownPos = new Map();
     const needHistory = new Map();
     let latestSnapshot = null;
+    let currentWorldRevision = null;
     let socket = null;
     let reconnectTimer = null;
     let renderFps = 0;
@@ -247,6 +256,7 @@
       const stats = latestSnapshot.stats;
       const runningText = stats.running ? "播放中" : "已暫停";
       statusLine.textContent = [
+        `世界 ${latestSnapshot.world_revision}`,
         `Tick ${latestSnapshot.tick}`,
         `時間 ${minuteToClock(latestSnapshot.minute_of_day)}`,
         `狀態 ${runningText}`,
@@ -285,6 +295,11 @@
 
       socket.addEventListener("message", (event) => {
         const snapshot = JSON.parse(event.data);
+        if (currentWorldRevision !== snapshot.world_revision) {
+          topdownPos.clear();
+          needHistory.clear();
+          currentWorldRevision = snapshot.world_revision;
+        }
         latestSnapshot = snapshot;
         syncPositionTargets(snapshot.agents);
         updateNeedHistory(snapshot.agents);
@@ -329,7 +344,9 @@
     }
 
     function updateNeedHistory(agents) {
+      const activeIds = new Set();
       for (const agent of agents) {
+        activeIds.add(agent.agent_id);
         const history = needHistory.get(agent.agent_id) || [];
         history.push({
           hunger: Number(agent.needs.hunger),
@@ -340,6 +357,11 @@
           history.splice(0, history.length - HISTORY_LIMIT);
         }
         needHistory.set(agent.agent_id, history);
+      }
+      for (const agentId of Array.from(needHistory.keys())) {
+        if (!activeIds.has(agentId)) {
+          needHistory.delete(agentId);
+        }
       }
     }
 
@@ -441,7 +463,7 @@
 
       ctx.fillStyle = "#0f172a";
       ctx.font = "bold 13px Noto Sans TC, Microsoft JhengHei UI, sans-serif";
-      ctx.fillText(`Tick ${snapshot.tick} / 時間 ${minuteToClock(snapshot.minute_of_day)}`, 14, 20);
+      ctx.fillText(`世界 ${snapshot.world_revision} / Tick ${snapshot.tick} / 時間 ${minuteToClock(snapshot.minute_of_day)}`, 14, 20);
     }
 
     function drawNeedSeries(ctx, history, key, color, left, top, width, height) {
@@ -567,6 +589,7 @@
 
     playPauseBtn.addEventListener("click", () => sendCommand("toggle"));
     stepBtn.addEventListener("click", () => sendCommand("step"));
+    resetBtn.addEventListener("click", () => sendCommand("reset"));
     reconnectBtn.addEventListener("click", () => connectSocket());
     window.addEventListener("resize", () => {
       if (latestSnapshot) {

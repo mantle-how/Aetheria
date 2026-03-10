@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import dist
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from domain.agent.need import NeedState
 from domain.agent.relationship import RelationshipLedger
-from model.action import ActionIntent, ActionType
+from domain.simulation.action import ActionIntent, ActionType
 
 if TYPE_CHECKING:
     from domain.simulation.perception import AgentPerception

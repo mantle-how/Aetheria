@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 
-from model.config import NeedConfig
+from domain.simulation.config import NeedConfig
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:

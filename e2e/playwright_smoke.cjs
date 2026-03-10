@@ -1,10 +1,14 @@
-const fs = require("fs");
+﻿const fs = require("fs");
+const http = require("http");
 const path = require("path");
+const { spawn } = require("child_process");
 const { chromium } = require("playwright");
 
+const REPO_ROOT = path.resolve(__dirname, "..");
 const ARTIFACT_DIR = path.join(__dirname, "artifacts");
 const SCREENSHOT_PATH = path.join(ARTIFACT_DIR, "web-home.png");
 const TARGET_URL = "http://127.0.0.1:8000/";
+const SERVER_ARGS = ["-m", "uvicorn", "apps.api.main:app", "--host", "127.0.0.1", "--port", "8000"];
 
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -27,63 +31,185 @@ function fail(message, context = {}) {
   process.exitCode = 1;
 }
 
+function parseStatus(text) {
+  const source = text || "";
+  const revisionMatch = source.match(/世界\s+(\d+)/);
+  const tickMatch = source.match(/Tick\s+(\d+)/);
+  return {
+    text: source,
+    worldRevision: revisionMatch ? Number(revisionMatch[1]) : null,
+    tick: tickMatch ? Number(tickMatch[1]) : null,
+  };
+}
+
+function probeServer() {
+  return new Promise((resolve) => {
+    const request = http.get(TARGET_URL, (response) => {
+      response.resume();
+      resolve(true);
+    });
+    request.on("error", () => resolve(false));
+    request.setTimeout(1000, () => {
+      request.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function waitForServer(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await probeServer()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function ensureServer() {
+  if (await probeServer()) {
+    return { process: null, logs: [], started: false };
+  }
+
+  const logs = [];
+  const serverProcess = spawn("python", SERVER_ARGS, {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  serverProcess.stdout.on("data", (chunk) => logs.push(String(chunk).trim()));
+  serverProcess.stderr.on("data", (chunk) => logs.push(String(chunk).trim()));
+
+  const ready = await waitForServer(20000);
+  if (!ready) {
+    serverProcess.kill();
+    throw new Error(`Server did not become ready. Logs: ${logs.join(" | ")}`);
+  }
+
+  return { process: serverProcess, logs, started: true };
+}
+
+async function stopServer(serverProcess) {
+  if (!serverProcess) {
+    return;
+  }
+  serverProcess.kill();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+
+async function readStatus(page) {
+  const text = await page.evaluate(() => document.querySelector("#statusLine")?.textContent || "");
+  return parseStatus(text);
+}
+
 async function run() {
   ensureDir(ARTIFACT_DIR);
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-  });
-  const page = await context.newPage();
+  let server = { process: null, logs: [], started: false };
+  let browser = null;
+  let context = null;
   const consoleErrors = [];
   const pageErrors = [];
   const wsEvents = [];
 
-  page.on("console", (msg) => {
-    if (msg.type() === "error") {
-      consoleErrors.push(msg.text());
-    }
-  });
-  page.on("pageerror", (err) => {
-    pageErrors.push(String(err));
-  });
-  page.on("websocket", (ws) => {
-    wsEvents.push(`open:${ws.url()}`);
-    ws.on("framesent", (event) => wsEvents.push(`sent:${String(event.payload).slice(0, 120)}`));
-    ws.on("framereceived", (event) => wsEvents.push(`recv:${String(event.payload).slice(0, 120)}`));
-    ws.on("close", () => wsEvents.push("close"));
-    ws.on("socketerror", (error) => wsEvents.push(`socketerror:${String(error)}`));
-  });
-
   try {
+    server = await ensureServer();
+
+    browser = await chromium.launch({ headless: true });
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+
+    page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        consoleErrors.push(msg.text());
+      }
+    });
+    page.on("pageerror", (err) => {
+      pageErrors.push(String(err));
+    });
+    page.on("websocket", (ws) => {
+      wsEvents.push(`open:${ws.url()}`);
+      ws.on("framesent", (event) => wsEvents.push(`sent:${String(event.payload).slice(0, 120)}`));
+      ws.on("framereceived", (event) => wsEvents.push(`recv:${String(event.payload).slice(0, 120)}`));
+      ws.on("close", () => wsEvents.push("close"));
+      ws.on("socketerror", (error) => wsEvents.push(`socketerror:${String(error)}`));
+    });
+
     await page.goto(TARGET_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForSelector("#topdownCanvas", { state: "visible", timeout: 10000 });
     await page.waitForSelector("#dashboardCanvas", { state: "visible", timeout: 10000 });
-    try {
-      await page.waitForFunction(() => {
-        const status = document.querySelector("#statusLine");
-        if (!status) {
-          return false;
-        }
-        return (status.textContent || "").includes("Tick ");
-      }, null, { timeout: 15000 });
-    } catch (error) {
-      const statusText = await page.evaluate(() => {
-        const status = document.querySelector("#statusLine");
-        return status ? status.textContent || "" : "";
-      });
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#statusLine");
+      if (!status) {
+        return false;
+      }
+      const text = status.textContent || "";
+      return text.includes("Tick ") && text.includes("世界 ");
+    }, null, { timeout: 15000 });
+
+    await page.waitForTimeout(800);
+
+    await page.click("#playPauseBtn");
+    await page.waitForFunction(() => {
+      const text = document.querySelector("#statusLine")?.textContent || "";
+      return text.includes("已暫停");
+    }, null, { timeout: 5000 });
+
+    const pausedStatus = await readStatus(page);
+    await page.waitForTimeout(400);
+    const pausedLaterStatus = await readStatus(page);
+    if (pausedLaterStatus.tick !== pausedStatus.tick) {
       await page.screenshot({ path: SCREENSHOT_PATH, fullPage: true });
-      fail("Frontend did not receive Tick snapshot within timeout", {
-        error: String(error),
-        statusText,
+      fail("Tick advanced while runtime was paused", {
+        pausedStatus,
+        pausedLaterStatus,
         consoleErrors,
         pageErrors,
+        serverLogs: server.logs,
         wsEvents,
         screenshot: SCREENSHOT_PATH,
       });
       return;
     }
-    await page.waitForTimeout(1200);
+
+    await page.click("#stepBtn");
+    await page.waitForFunction((tick) => {
+      const text = document.querySelector("#statusLine")?.textContent || "";
+      const match = text.match(/Tick\s+(\d+)/);
+      return Boolean(match) && Number(match[1]) > tick;
+    }, pausedStatus.tick, { timeout: 5000 });
+
+    await page.click("#playPauseBtn");
+    await page.waitForFunction(() => {
+      const text = document.querySelector("#statusLine")?.textContent || "";
+      return text.includes("播放中");
+    }, null, { timeout: 5000 });
+
+    const beforeReset = await readStatus(page);
+    await page.click("#resetBtn");
+    await page.waitForFunction((previousRevision) => {
+      const text = document.querySelector("#statusLine")?.textContent || "";
+      const match = text.match(/世界\s+(\d+)/);
+      return Boolean(match) && Number(match[1]) > previousRevision;
+    }, beforeReset.worldRevision, { timeout: 5000 });
+    await page.waitForTimeout(400);
+
+    const afterReset = await readStatus(page);
+    if (afterReset.worldRevision <= beforeReset.worldRevision) {
+      await page.screenshot({ path: SCREENSHOT_PATH, fullPage: true });
+      fail("World revision did not advance after reset", {
+        beforeReset,
+        afterReset,
+        consoleErrors,
+        pageErrors,
+        serverLogs: server.logs,
+        wsEvents,
+        screenshot: SCREENSHOT_PATH,
+      });
+      return;
+    }
 
     const metrics = await page.evaluate(() => {
       const topdown = document.querySelector("#topdownCanvas");
@@ -142,8 +268,8 @@ async function run() {
       if (!metrics.dashHasInk) {
         checks.push("dashboard canvas has no drawn pixels");
       }
-      if (!metrics.statusText.includes("Tick ")) {
-        checks.push(`status did not include Tick: ${metrics.statusText}`);
+      if (!metrics.statusText.includes("Tick ") || !metrics.statusText.includes("世界 ")) {
+        checks.push(`status text missing expected fields: ${metrics.statusText}`);
       }
     }
     if (consoleErrors.length > 0) {
@@ -159,6 +285,7 @@ async function run() {
         metrics,
         consoleErrors,
         pageErrors,
+        serverLogs: server.logs,
         wsEvents,
         screenshot: SCREENSHOT_PATH,
       });
@@ -169,7 +296,10 @@ async function run() {
       JSON.stringify(
         {
           ok: true,
+          beforeReset,
+          afterReset,
           metrics,
+          serverStarted: server.started,
           wsEvents,
           screenshot: SCREENSHOT_PATH,
         },
@@ -178,8 +308,13 @@ async function run() {
       )
     );
   } finally {
-    await context.close();
-    await browser.close();
+    if (context) {
+      await context.close();
+    }
+    if (browser) {
+      await browser.close();
+    }
+    await stopServer(server.process);
   }
 }
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import dist
@@ -6,9 +6,9 @@ from math import dist
 from domain.agent.agent_model import ABMAgent
 from domain.agent.need import NeedState
 from domain.event.base import SimulationEvent
+from domain.simulation.action import ActionIntent, ActionOutcome, ActionType
 from domain.world.place import Place
 from domain.world.rule import WorldRules
-from model.action import ActionIntent, ActionOutcome, ActionType
 
 
 @dataclass

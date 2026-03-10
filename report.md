@@ -1,36 +1,40 @@
-# MVP 重構報告
+# 2026-03-06 工作日誌
 
-## 已完成變更
+## 今日完成
 
-- 重新整理 `domain` 層，建立可讀性較高的 ABM 核心：
-  - `domain/agent`：代理人狀態、需求與關係網路。
-  - `domain/world`：地點、規則與世界行為結算。
-  - `domain/event`：結構化模擬事件。
-  - `domain/simulation`：感知快照、序列式 tick 迴圈與記錄器。
-- 新增 `model/config.py`，讓管理者可控變數集中在同一處設定。
-- 重寫 `model/action.py`，改為明確的行動意圖與行動結果模型。
-- 重寫 `model/test.py`，提供：
-  - 給視覺化層使用的 `Entity`、`InteractiveEntity`、`Agent`；
-  - 可重現的多代理人示範世界；
-  - 先跑幾個 tick 再輸出物件給 `view` 的 helper。
-- 更新 `view/demo.py`，改為直接載入 ABM 模擬資料，而不是手寫靜態假資料。
+- 完成 Aetheria Demo 行為規則調整：
+  - 社交目標改為優先尋找「其他存活且目前閒置、心情最低的 agent」。
+  - 社交心情恢復量調整為 `0.5 / tick`。
+  - 休息機制改為進入後持續到精力 `> 90` 才退出。
+  - 休息中的 agent 當 tick 不會扣減飢餓與心情。
+  - 休息精力恢復量調整為 `0.2 / tick`。
 
-## 設計說明
+- 完成 Web 視覺化驗證與除錯：
+  - 使用 Playwright 建立 smoke test 與 e2e 測試。
+  - 修正 WebSocket 連線失敗問題，補上 `websockets` 依賴。
+  - 確認 Topdown 畫布、儀表板、即時狀態列都能正常顯示。
 
-- 模擬採用偏社會科學取向的決策順序：
-  - 先處理飢餓；
-  - 再處理精力；
-  - 再處理情緒與社交；
-  - 工作時段內優先工作；
-  - 其餘時間則移動到社交場所。
-- 所有可調整的門檻、世界大小、tick 間隔、人口數、log 行為，都集中在 `model/config.py`。
-- 記錄器會保留格式化事件字串，並可依設定選擇是否同步輸出到終端。
-- 世界規則與設定由上而下明確傳遞，避免隱含全域變數或未定義變數造成錯誤。
+## 今日產出
 
-## 後續可改進方向
+- 新增 Web 端測試與設定：
+  - `playwright.config.js`
+  - `e2e/playwright_smoke.cjs`
+  - `e2e/web.spec.js`
+  - `package.json` 測試 script
 
-- 補上多名代理人同時搶同一資源時的衝突處理。
-- 加入隨機性或人格差異，同時保留 deterministic 模式方便除錯。
-- 補上 log 與世界快照持久化，讓模擬結果可以重播。
-- 增加單元測試，覆蓋行為結算、門檻判斷與設定驗證。
-- 將目前的靜態畫面改成逐 tick 動畫顯示。
+- 更新模擬與設定相關檔案：
+  - `model/config.py`
+  - `domain/agent/agent_model.py`
+  - `domain/simulation/perception.py`
+  - `domain/world/world_model.py`
+  - `domain/agent/README.md`
+
+## 驗證結果
+
+- `python -m compileall -q domain model view apps` 通過。
+- Playwright smoke test 通過。
+- Playwright e2e test 通過。
+
+## 備註
+
+- 目前專案已有 `node_modules`、`package-lock.json` 與 Playwright 測試基礎，可直接繼續擴充前端測試案例。

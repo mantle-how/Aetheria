@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 from domain.agent.agent_model import ABMAgent
 from domain.event.base import SimulationEvent
+from domain.simulation.config import LoggingConfig
 from domain.world.world_model import SimulationWorld
-from model.config import LoggingConfig
 
 
 @dataclass(frozen=True)

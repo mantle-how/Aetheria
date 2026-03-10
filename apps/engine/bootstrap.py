@@ -1,82 +1,17 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from dataclasses import dataclass
 from math import ceil, sqrt
 
+from apps.engine.config import DEFAULT_AGENT_COUNT
 from domain.agent.agent_model import ABMAgent
 from domain.agent.need import NeedState
 from domain.agent.relationship import RelationshipLedger
+from domain.simulation.action import ActionType
+from domain.simulation.config import SimulationConfig, build_default_config
 from domain.simulation.perception import ABMSimulation, SimulationLogger
 from domain.world.place import Place
 from domain.world.rule import WorldRules
 from domain.world.world_model import SimulationWorld
-from model.action import ActionType
-from model.config import SimulationConfig, build_default_config
-
-
-@dataclass
-class Entity:
-    """給既有視覺化層使用的簡單可渲染物件。"""
-
-    entity_id: int
-    name: str
-    x: float
-    y: float
-
-
-@dataclass
-class InteractiveEntity(Entity):
-    """地點或互動物件在畫面上的標記。"""
-
-    durability: float = 100.0
-
-
-class Agent(ABMAgent):
-    """保留舊版視覺化介面的相容代理人包裝。"""
-
-    def __init__(
-        self,
-        entity_id: int,
-        name: str,
-        x: float,
-        y: float,
-        gender: str = "U",
-        health: float = 100.0,
-        years: int = 0,
-        bag: list[str] | None = None,
-        occupation: str = "居民",
-        home_place_id: str | None = None,
-        work_place_id: str | None = None,
-        social_place_id: str = "plaza_1",
-        needs: NeedState | None = None,
-    ):
-        base_config = build_default_config()
-        inventory = [] if bag is None else list(bag)
-        initial_needs = NeedState.from_config(base_config.needs) if needs is None else needs
-
-        resolved_home_place_id = home_place_id or f"home_{entity_id}"
-        resolved_work_place_id = work_place_id or "workhub_1"
-
-        super().__init__(
-            agent_id=entity_id,
-            name=name,
-            x=x,
-            y=y,
-            occupation=occupation,
-            home_place_id=resolved_home_place_id,
-            work_place_id=resolved_work_place_id,
-            social_place_id=social_place_id,
-            needs=initial_needs,
-            food_inventory=len(inventory),
-            relationships=RelationshipLedger(),
-            last_action=ActionType.IDLE,
-            health=float(health),
-            is_alive=True,
-            parent_home_place_ids=(resolved_home_place_id,),
-        )
-        self.gender = gender
-        self.years = years
-        self.bag = inventory
 
 
 def build_demo_simulation(config: SimulationConfig | None = None) -> ABMSimulation:
@@ -84,7 +19,7 @@ def build_demo_simulation(config: SimulationConfig | None = None) -> ABMSimulati
 
     if config is None:
         resolved_config = build_default_config()
-        resolved_config.population.agent_count = 50
+        resolved_config.population.agent_count = DEFAULT_AGENT_COUNT
     else:
         resolved_config = config
 
@@ -100,35 +35,6 @@ def build_demo_simulation(config: SimulationConfig | None = None) -> ABMSimulati
     )
     logger = SimulationLogger(resolved_config.logging)
     return ABMSimulation(world=world, logger=logger)
-
-
-def simulation_to_entities(
-    simulation: ABMSimulation,
-) -> list[Entity | InteractiveEntity | Agent]:
-    """把目前模擬狀態轉成視覺化層可以直接繪製的物件。"""
-
-    place_markers = [
-        InteractiveEntity(
-            entity_id=1000 + index,
-            name=place.name,
-            x=place.x,
-            y=place.y,
-            durability=max(1.0, float(place.food_stock + 1)),
-        )
-        for index, place in enumerate(simulation.world.places.values())
-    ]
-    return [*place_markers, *simulation.world.agents]
-
-
-def generate_demo_entities(
-    steps: int = 0,
-    config: SimulationConfig | None = None,
-) -> list[Entity | InteractiveEntity | Agent]:
-    """先跑幾個 tick，再回傳給視覺化層使用的物件。"""
-
-    simulation = build_demo_simulation(config)
-    simulation.run(steps)
-    return simulation_to_entities(simulation)
 
 
 def _build_demo_places(config: SimulationConfig) -> dict[str, Place]:
@@ -227,9 +133,9 @@ def _build_demo_places(config: SimulationConfig) -> dict[str, Place]:
     return places
 
 
-def _build_demo_agents(config: SimulationConfig, places: dict[str, Place]) -> list[Agent]:
+def _build_demo_agents(config: SimulationConfig, places: dict[str, Place]) -> list[ABMAgent]:
     base_names = ["小安", "小博", "小佳", "小德", "小依", "小峰", "小雅", "小航"]
-    agents: list[Agent] = []
+    agents: list[ABMAgent] = []
     work_place_ids = sorted(
         [place_id for place_id, place in places.items() if place.kind == "work"],
         key=lambda value: int(value.split("_")[-1]),
@@ -253,23 +159,25 @@ def _build_demo_agents(config: SimulationConfig, places: dict[str, Place]) -> li
             needs.hunger += 25.0
         needs.normalize(config.needs)
 
-        bag = [f"ration_{n}" for n in range(config.population.initial_food_per_agent)]
-        agent = Agent(
-            entity_id=agent_id,
-            name=name,
-            x=home.x,
-            y=home.y,
-            gender="U",
-            health=config.population.initial_health,
-            years=24 + index,
-            bag=bag,
-            occupation="工作者",
-            home_place_id=home.place_id,
-            work_place_id=work_place_ids[index % len(work_place_ids)],
-            social_place_id=social_place_ids[index % len(social_place_ids)],
-            needs=needs,
+        agents.append(
+            ABMAgent(
+                agent_id=agent_id,
+                name=name,
+                x=home.x,
+                y=home.y,
+                occupation="工作者",
+                home_place_id=home.place_id,
+                work_place_id=work_place_ids[index % len(work_place_ids)],
+                social_place_id=social_place_ids[index % len(social_place_ids)],
+                needs=needs,
+                food_inventory=config.population.initial_food_per_agent,
+                relationships=RelationshipLedger(),
+                last_action=ActionType.IDLE,
+                health=config.population.initial_health,
+                is_alive=True,
+                parent_home_place_ids=(home.place_id,),
+            )
         )
-        agents.append(agent)
 
     return agents
 
